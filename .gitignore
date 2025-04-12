@@ -2,3 +2,6 @@ Decoders/
 mech_interp_utils/utils_main/src/transformer_utils/cost_performance/
 mech_interp_utils/utils_main/src/transformer_utils/ll_snapper/
 mech_interp_utils/utils_main/src/transformer_utils/tuned_lens/
+logs/
+Outputs/
+*__pycache__*
