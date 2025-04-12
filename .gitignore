@@ -5,3 +5,4 @@ mech_interp_utils/utils_main/src/transformer_utils/tuned_lens/
 logs/
 Outputs/
 *__pycache__*
+logs2/
