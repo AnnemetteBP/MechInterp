@@ -1,0 +1,15 @@
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch
+torchvision
+torchaudio
+
+accelerate
+ai2-olmo
+trl
+
+notebook
+
+bitsandbytes
+
+nnsight
+einops
