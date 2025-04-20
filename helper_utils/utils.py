@@ -6,10 +6,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import matplotlib.pyplot as plt
-
-import warnings
-warnings.filterwarnings('ignore')
 
 
 def make_dir(directory:str) -> str:
@@ -37,17 +33,6 @@ def save_tokenizer(tokenizer, save_path:str) -> None:
     tokenizer.save_pretrained(save_path)
     print(f"Tokenizer saved to {save_path}")
 
-
-def measure_time(func, *args, **kwargs):
-    """ Measures execution time of any function """
-    start_time = time.perf_counter()
-    result = func(*args, **kwargs)
-    end_time = time.perf_counter()
-    
-    elapsed_time = end_time - start_time
-    print(f"Execution Time for {func.__name__}: {elapsed_time:.4f} seconds")
-    
-    return result, elapsed_time
 
 
 def check_quant_config(model:Any) -> None:
@@ -144,130 +129,41 @@ def print_model_weights(model:torch.nn.Module) -> None:
             print(f"Layer: {name} - Weights: {param.data}")
 
 
-def ptq_1bit(model: Any) -> Any:
-    """ Apply 1-bit quantization {-1, 1} (binary) to OLMo transformer layers. """
+def print_unique_weights(model:Any) -> None:
+    """ Print the unique weights of any model. """
     
     for name, module in model.named_modules():
-        if isinstance(module, nn.Linear) and 'layers' in name:
-            # Only quantize attention (q_proj, k_proj, v_proj, out_proj) and feedforward (fc1, fc2)
-            if any(layer in name for layer in ['q_proj', 'k_proj', 'v_proj', 'out_proj', 'fc1', 'fc2']):
-                weight = module.weight.data
-                quantized_weight = torch.sign(weight)  # {-1, 1} binary quantization
-                
-                module.weight.data = quantized_weight
-                print(f"Quantized Layer: {name}\n", quantized_weight)
-
-    return model
+        if isinstance(module, nn.Linear):
+            print(f"{name}: Unique values = {module.weight.data.unique().numel()}")
 
 
-def ptq_1_58bit(model: Any, sparsity_ratio: float = 0.25, sample_ratio: float = 0.01) -> Any:
-    """ Apply 1.58-bit quantization (ternary {-1, 0, 1}) to transformer layers.
-        Example of other precision:
-            # Estimate tau in FP32
-            abs_weight_fp32 = module.weight.data.abs().to(torch.float32)
-            sample = abs_weight_fp32.flatten()[torch.randperm(abs_weight_fp32.numel())[:num_samples]]
-            tau = torch.quantile(sample, sparsity_ratio)
-
-            # Quantize in FP16
-            weight_fp16 = module.weight.data.to(torch.float16)
-            quantized_weight = torch.sign(weight_fp16) * (weight_fp16.abs() > tau)
-            quantized_weight[weight_fp16.abs() <= tau] = 0
-            module.weight.data = quantized_weight """
+def add_hooks(model:Any, hook_idx:int) -> Dict:
+    """ Add Hooks for Easy Layer Grab:
+            Hooks to extract weights or activations during the forward pass.
+            Example: model.layers[4].self_attn.q_proj.register_forward_hook(hook_fn("q_proj")) """
     
-    for name, module in model.named_modules():
-        if isinstance(module, nn.Linear) and 'layers' in name:
-            if any(layer in name for layer in ['q_proj', 'k_proj', 'v_proj', 'out_proj', 'fc1', 'fc2']):
-                weight = module.weight.data.to(torch.float32)
-                #weight = module.weight.data.to(torch.float16)
-                abs_weight = weight.abs()
+    activations = {}
 
-                # Efficient threshold estimation (quantile-based)
-                num_samples = max(1000, int(sample_ratio * abs_weight.numel()))
-                sample_values = abs_weight.flatten()[torch.randperm(abs_weight.numel())[:num_samples]]
-                tau = torch.quantile(sample_values, sparsity_ratio)
+    def hook_fn(name):
+        def hook(module, input, output):
+            activations[name] = output.detach()
+        return hook
 
-                # Apply ternary quantization
-                quantized_weight = torch.sign(weight) * (abs_weight > tau)
-                quantized_weight[abs_weight <= tau] = 0  # Set some weights to zero
+    model.layers[hook_idx].self_attn.q_proj.register_forward_hook(hook_fn('q_proj'))
+    return activations
 
-                module.weight.data = quantized_weight
-                print(f"Quantized Layer: {name}\n", quantized_weight)
+def requires_grad(model:Any) -> None:
+    model.eval()
+    for param in model.parameters():
+        if param.requires_grad is True:  # if that matters for hooks
+            print(param)
 
-    return model
+def track_activations(model:Any, input_ids:torch.Tensor) -> None:
+    # Example: forward pass with tracking
+    model.eval()
+    with torch.no_grad():
+        _ = model(input_ids)
 
-
-def ptq_2bit(model: Any) -> Any:
-    """ Apply 2-bit quantization {-1, -0.33, 0.33, 1} to transformer layers. """
-    
-    for name, module in model.named_modules():
-        if isinstance(module, nn.Linear) and 'layers' in name:
-            if any(layer in name for layer in ['q_proj', 'k_proj', 'v_proj', 'out_proj', 'fc1', 'fc2']):
-                weight = module.weight.data
-                abs_weight = weight.abs()
-                scale = abs_weight.mean()  # Compute scale for normalization
-
-                # 2-bit Quantization: 4 levels
-                quantized_weight = torch.zeros_like(weight)
-                quantized_weight[weight > 0.66 * scale] = 1
-                quantized_weight[(weight > 0) & (weight <= 0.66 * scale)] = 0.33
-                quantized_weight[(weight < 0) & (weight >= -0.66 * scale)] = -0.33
-                quantized_weight[weight < -0.66 * scale] = -1
-
-                module.weight.data = quantized_weight
-                print(f"Quantized Layer: {name}\n", quantized_weight)
-
-    return model
-
-
-def ptq_4bit_uniform(model: Any) -> Any:
-    """ Apply 4-bit uniform quantization to transformer layers. """
-
-    num_levels = 2**4  # 16 levels
-    levels = torch.linspace(-1, 1, num_levels)
-
-    for name, module in model.named_modules():
-        if isinstance(module, nn.Linear) and 'layers' in name:
-            if any(layer in name for layer in ['q_proj', 'k_proj', 'v_proj', 'out_proj', 'fc1', 'fc2']):
-                weight = module.weight.data
-                max_val = weight.abs().max()
-                if max_val == 0:
-                    continue  # avoid division by zero
-
-                # Normalize weights to [-1, 1]
-                norm_weight = weight / max_val
-
-                # Find closest quantization level
-                quantized = norm_weight.unsqueeze(-1) - levels.to(weight.device)
-                quantized_idx = torch.argmin(quantized.abs(), dim=-1)
-                quantized_weight = levels[quantized_idx].to(weight.device) * max_val
-
-                module.weight.data = quantized_weight
-                print(f"Quantized {name} to 4-bit\n", quantized_weight)
-
-    return model
-
-
-def ptq_8bit_uniform(model: Any) -> Any:
-    """ Apply 8-bit uniform quantization to transformer layers """
-
-    num_levels = 2**8  # 256 levels
-    levels = torch.linspace(-1, 1, num_levels)
-
-    for name, module in model.named_modules():
-        if isinstance(module, nn.Linear) and 'layers' in name:
-            if any(layer in name for layer in ['q_proj', 'k_proj', 'v_proj', 'out_proj', 'fc1', 'fc2']):
-                weight = module.weight.data
-                max_val = weight.abs().max()
-                if max_val == 0:
-                    continue
-
-                norm_weight = weight / max_val
-
-                quantized = norm_weight.unsqueeze(-1) - levels.to(weight.device)
-                quantized_idx = torch.argmin(quantized.abs(), dim=-1)
-                quantized_weight = levels[quantized_idx].to(weight.device) * max_val
-
-                module.weight.data = quantized_weight
-                print(f"Quantized {name} to 8-bit\n", quantized_weight)
-
-    return model
+    # Then inspect:
+    for layer, act in model.activations.items():
+        print(f"{layer}: {act.shape}, mean={act.mean():.4f}, std={act.std():.4f}")

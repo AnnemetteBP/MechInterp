@@ -18,6 +18,9 @@ import seaborn as sns
 
 from IPython.display import display, HTML
 
+from .sae_class import SAE
+from helper_utils.enum_keys import DirPath
+
 
 
 """ ******************** ACTIVATION ******************** """
@@ -62,42 +65,6 @@ def get_layer_activations(model:Any, tokenizer:Any, text:str, target_layer_idx:i
     return input_ids[0], activations[0].squeeze(0)
 
 
-""" ******************** SAE CLASS ******************** """
-
-class SAE(nn.Module):
-    def __init__(self, input_dim, dict_size=512, sparsity_lambda=1e-3):
-        super().__init__()
-        self.encoder = nn.Linear(input_dim, dict_size, bias=False)
-        self.decoder = nn.Linear(dict_size, input_dim, bias=False)
-        self.sparsity_lambda = sparsity_lambda
-
-    def forward(self, x):
-        code = self.encoder(x)
-        reconstruction = self.decoder(code)
-        return reconstruction, code
-
-    def train_sae(self, data, epochs=5, lr=1e-3, batch_size=8):
-        optimizer = torch.optim.Adam(self.parameters(), lr=lr)
-        dataset = torch.utils.data.TensorDataset(data)
-        loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
-        losses = []
-        for epoch in range(epochs):
-            epoch_loss = 0
-            for batch, in loader:
-                recon, code = self.forward(batch)
-                loss = F.mse_loss(recon, batch) + self.sparsity_lambda * code.abs().mean()
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                epoch_loss += loss.item()
-            losses.append(epoch_loss)
-        return losses
-
-    def encode(self, x):
-        return self.encoder(x)
-
-
 """ ******************** PLOTTING ******************** """
 
 def plot_colored_tokens(tokens:Any, scores:Any, cmap:str='coolwarm'):
@@ -120,7 +87,7 @@ def plot_norms(activations:Any, save_path:str) -> None:
             Quantized models often reduce the range of activation values, which can be detected via shrinking norms.
         Input example: activations = [layer_data['hidden'] for layer_data in all_layer_outputs.values()] """
     
-    full_path:str = f"Outputs/DictionaryLearning/actnorms_{save_path}.jpg"
+    full_path:str = f"{DirPath.DICT_VIS.value}/actnorms_{save_path}.jpg"
 
     norms = [torch.norm(activation, dim=-1).mean().item() for activation in activations]
     
@@ -148,7 +115,7 @@ def compare_norms(norm_list_fp16:List, norm_list_ptq:List, save_path:str) -> Non
     plt.legend()
     plt.grid(True)
     
-    plt.savefig(f"Outputs/DictionaryLearning/norm_comparison_{save_path}.jpg")
+    plt.savefig(f"{DirPath.DICT_VIS.value}/norm_comparison_{save_path}.jpg")
     plt.show()
 
 
@@ -175,7 +142,7 @@ def compare_code_distributions(code_a, code_b) -> Tuple[Any,Any]:
 def visualize_concepts(codes:Any, save_path:str, method:str, layer=None) -> None:
     """ Project and visualize using PCA / 'pca' or TSNE / 'tsne' """
 
-    full_path:str = f"Outputs/DictionaryLearning/concepts_{save_path}.jpg"
+    full_path:str = f"{DirPath.DICT_VIS.value}/concepts_{save_path}.jpg"
     codes_np = codes.cpu().numpy()
 
     if method == 'pca':
@@ -302,10 +269,8 @@ Activation norms:
 Interpretation:
     Lower average norms might correlate with reduced semantic richness or degraded internal feature geometry.
 """
-def run_sae(model:Any, tokenizer:Any, save_path:str, file_name:str, text:str, layer_idx:int) -> Tuple[Any,torch.Tensor]:
+def run_sae(model:Any, tokenizer:Any, full_path:str, file_name:str, text:str, layer_idx:int) -> Tuple[Any,torch.Tensor]:
     """ Run single layer SAE analysis """
-
-    full_path:str = f"logs/sae_logs/{save_path}"
 
     token_ids, hidden = get_layer_activations(model, tokenizer, text, target_layer_idx=layer_idx)
     tokens = tokenizer.convert_ids_to_tokens(token_ids)
@@ -332,10 +297,9 @@ def run_sae(model:Any, tokenizer:Any, save_path:str, file_name:str, text:str, la
     return tokens, saliency
 
 
-def run_multi_layer_sae(model:Any, tokenizer:Any, save_path:str, file_name:str, text:str, target_layers:List[int]) -> Dict:
+def run_multi_layer_sae(model:Any, tokenizer:Any, full_path:str, file_name:str, text:str, target_layers:List[int]) -> Dict:
     """ Run multi-layer SAE analysis """
 
-    full_path:str = f"logs/sae_logs/{save_path}"
     all_layer_outputs = {}
 
     for layer_idx in target_layers:
@@ -379,7 +343,7 @@ def run_multi_layer_sae(model:Any, tokenizer:Any, save_path:str, file_name:str, 
 
 """ ******************** FULL DICT LEARNING INTERP ******************** """
 
-def plot_summary_metrics(summary:Any, layer_idx:Any, save_path:str) -> None:
+def plot_summary_metrics(summary:Any, layer_idx:Any, save_path:str=DirPath.DICT_VIS.value) -> None:
     saliency = summary['saliency']
     entropy = summary['entropy']
     usage = summary['usage']
@@ -404,10 +368,9 @@ def plot_summary_metrics(summary:Any, layer_idx:Any, save_path:str) -> None:
     plt.close()
 
 
-def analyze_sae_layer(model:Any, tokenizer:Any, sae, text, layer_idx, dir, save_name, topk=5) -> Dict:
+def analyze_sae_layer(model:Any, tokenizer:Any, sae:Any, text:Any, layer_idx:Any, save_path:str, topk:int=5) -> Dict:
     """ Full analysis pipeline for a given layer """
 
-    save_path = f"logs/full_sae_logs/{dir}/{save_name}"
     os.makedirs(save_path, exist_ok=True)
 
     # === Get hidden states
@@ -438,14 +401,13 @@ def analyze_sae_layer(model:Any, tokenizer:Any, sae, text, layer_idx, dir, save_
     }
 
     torch.save(summary, f"{save_path}/layer_{layer_idx}_summary.pt")
-
     # === Plot visual summary
     plot_summary_metrics(summary, layer_idx, save_path)
 
     return summary
 
 
-def explain_concept(codes:Any, tokens:Any, concept_idx:Any, top_k=5) -> List[Any]:
+def explain_concept(codes:Any, tokens:Any, concept_idx:Any, top_k:int=5) -> List[Any]:
     """ Show top tokens that activate a concept most """
 
     concept_vals = codes[:, concept_idx]
@@ -462,11 +424,8 @@ def run_single_layer(codes:Any, tokens:Any, topk:int=5) -> Tuple[Any|int,Any|Lis
     return i, top_toks
 
 
-def run_all_layers(model:Any, tokenizer:Any, sae_dict:Dict, text:Any, layers:Any, dir:str, save_name:str) -> Dict:
-    
+def run_all_layers(model:Any, tokenizer:Any, sae_dict:Dict, text:Any, layers:Any, save_root:str) -> Dict:
     all_results = {}
-    save_root = f"logs/full_sae_logs/{dir}/{save_name}"
-
     for layer in layers:
         print(f"Running analysis for layer {layer}")
         sae = sae_dict[layer]

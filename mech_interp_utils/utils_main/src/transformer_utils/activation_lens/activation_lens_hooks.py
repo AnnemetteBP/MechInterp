@@ -8,25 +8,15 @@ from PTQ.ptq_utils import QuantLinear
 _RESID_SUFFIXES = {".self_attn", ".mlp"}
 
 def unquantize_tensor(tensor):
-    """
-    Unquantize a tensor if it is quantized, i.e., if it has a `dequantize` method.
-    """
     if hasattr(tensor, "dequantize"):
         return tensor.dequantize()
-    
     return tensor.float()
 
 
 def blocks_input_locator(model: nn.Module):
-    """
-    Identifies the input to the transformer blocks.
-    """
     return lambda: model.embed_tokens  # OLMo input embeddings
 
 def final_layernorm_locator(model: nn.Module):
-    """
-    Identifies the final normalization layer.
-    """
     if hasattr(model.base_model, "norm"):
         return lambda: model.base_model.norm
     else:
@@ -67,15 +57,13 @@ def _get_layer_and_compose_with_ln(model, name):
         ln = lambda x: x
     return lambda x: _get_layer(model, name)(ln(x))
 
-def make_decoder(model, decoder_layer_names=['norm', 'lm_head']):  # Adjusted for OLMo
+def make_decoder(model, decoder_layer_names=['norm', 'lm_head']):
     _locate_special_modules(model)
-
     decoder_layers = [_get_layer_and_compose_with_ln(model, name) for name in decoder_layer_names]
 
     def _decoder(x):
         for name, layer in zip(decoder_layer_names, decoder_layers):
             layer_out = _sqz(layer(_sqz(x)))
-
             is_resid = any([name.endswith(s) for s in _RESID_SUFFIXES])
             if is_resid:
                 x = x + layer_out
@@ -87,13 +75,13 @@ def make_decoder(model, decoder_layer_names=['norm', 'lm_head']):  # Adjusted fo
 def make_lens_hooks(
     model,
     layer_names: list,
-    decoder_layer_names: list = ['norm', 'lm_head'],  # Adjusted for OLMo
+    decoder_layer_names: list = ['norm', 'lm_head'],
     verbose=True,
     start_ix=None,
     end_ix=None,
+    record_activations=True,
 ):
     vprint = make_print_if_verbose(verbose)
-
     clear_lens_hooks(model)
 
     def _opt_slice(x, start_ix, end_ix):
@@ -109,22 +97,35 @@ def make_lens_hooks(
         if not hasattr(model, attr):
             setattr(model, attr, {})
 
+    if record_activations:
+        model._activations = {}
+        model._activation_handles = {}
+
     model._ordered_layer_names = layer_names
     model._lens_decoder = make_decoder(model, decoder_layer_names)
 
     def _make_record_logits_hook(name):
         model._layer_logits[name] = None
+        if record_activations:
+            model._activations[name] = None
 
         is_resid = any([name.endswith(s) for s in _RESID_SUFFIXES])
 
         def _record_logits_hook(module, input, output) -> None:
             del model._layer_logits[name]
+            if record_activations:
+                del model._activations[name]
+
             ln_f = model._ln_f_getter()
+            output = _sqz(output)
 
             if is_resid:
-                decoder_in = model._last_resid + _sqz(output)
+                decoder_in = model._last_resid + output
             else:
-                decoder_in = _sqz(output)
+                decoder_in = output
+
+            if record_activations:
+                model._activations[name] = decoder_in.detach()
 
             decoder_out = model._lens_decoder(decoder_in)
             decoder_out = _opt_slice(decoder_out, start_ix, end_ix)
@@ -151,9 +152,16 @@ def make_lens_hooks(
 
 def clear_lens_hooks(model):
     if hasattr(model, "_layer_logits_handles"):
-        for k, v in model._layer_logits_handles.items():
+        for v in model._layer_logits_handles.values():
             v.remove()
+        model._layer_logits_handles.clear()
 
-        ks = list(model._layer_logits_handles.keys())
-        for k in ks:
-            del model._layer_logits_handles[k]
+    if hasattr(model, "_activation_handles"):
+        for v in model._activation_handles.values():
+            v.remove()
+        model._activation_handles.clear()
+
+    if hasattr(model, "_layer_logits"):
+        model._layer_logits.clear()
+    if hasattr(model, "_activations"):
+        model._activations.clear()

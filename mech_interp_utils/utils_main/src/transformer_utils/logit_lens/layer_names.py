@@ -7,10 +7,10 @@ def make_layer_names(
     include_input=True,
     force_include_output=True,
     include_subblocks=False,
-    decoder_layer_names: list = ['norm', 'lm_head']  # Adjusted for OLMo
+    decoder_layer_names: list = ['norm', 'lm_head']  # Adjusted for OLMos and LLaMAs
 ):
-    # Fix: OLMo stores transformer layers under "model.layers", not "base_model.h"
-    h = get_child_module_by_names(model.base_model, ["layers"])  # Updated for OLMo
+    # Fix: OLMo OLMos and LLaMAs stores transformer layers under "model.layers", not "base_model.h"
+    h = get_child_module_by_names(model.base_model, ["layers"])  # Updated for OLMos and LLaMAs
     h_names = [f"layers.{i}" for i in range(len(h))]
 
     last_layer_name = h_names[-1]
@@ -32,7 +32,7 @@ def make_layer_names(
 
     # Optionally include input layer
     if include_input:
-        names = ["embed_tokens"] + names  # Changed "input" → "embed_tokens" for OLMo
+        names = ["embed_tokens"] + names  # Changed "input" → "embed_tokens" for OLMo / LLaMA architectures
 
     # Remove decoder layers from the names list
     def _subset(a, b):
