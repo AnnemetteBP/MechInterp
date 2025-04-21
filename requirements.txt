@@ -13,3 +13,5 @@ bitsandbytes
 
 nnsight
 einops
+
+plotly

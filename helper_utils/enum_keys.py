@@ -12,6 +12,8 @@ class ModelKey(Enum):
     OLMO = 'allenai/OLMo-1B-0724-hf'
     DEEP3B = 'NousResearch/DeepHermes-3-Llama-3-3B-Preview'
     DEEP8B = 'NousResearch/DeepHermes-3-Llama-3-8B-Preview'
+    HFBIT1 = 'HF1BitLLM/Llama3-8B-1.58-100B-tokens'
+    LLINSTRUCT8B:str = 'NousResearch/Meta-Llama-3.1-8B-Instruct'
 
 
 class FPKey(Enum):
@@ -21,6 +23,10 @@ class FPKey(Enum):
     TOKENIZER_3B:str = 'Decoders/NousResearch/DeepHermes3B/DeepHermes-3-Llama-3-3B-Preview-Tokenizer'
     FP16_8B:str = 'Decoders/NousResearch/DeepHermes8B/DeepHermes-3-Llama-3-8B-Preview-fp16'
     TOKENIZER_8B:str = 'Decoders/NousResearch/DeepHermes8B/DeepHermes-3-Llama-3-8B-Preview-Tokenizer'
+    HFBIT1_8B:str = 'Decoders/HF1BitLLM/Llama3-8B-1.58-100B-tokens'
+    HFBIT1_TOKENIZER:str = 'Decoders/HF1BitLLM/Llama3-8B-1.58-100B-tokens-tokenizer'
+    LINSTRUCT_8B:str = 'Decoders/NousResearch/LlamaInstruct8B/Meta-Llama-3.1-8B-Instruct'
+    LINSTRUCT_TOKENIZER:str = 'Decoders/NousResearch/LlamaInstruct8B/Meta-Llama-3.1-8B-Instruct-tokenizer'
 
 
 class PTDQKey3B(Enum):

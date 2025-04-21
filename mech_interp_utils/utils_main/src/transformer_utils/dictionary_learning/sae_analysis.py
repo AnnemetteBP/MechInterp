@@ -15,7 +15,6 @@ from sklearn.manifold import TSNE
 
 import matplotlib.pyplot as plt
 import seaborn as sns
-
 from IPython.display import display, HTML
 
 from .sae_class import SAE
@@ -24,7 +23,6 @@ from helper_utils.enum_keys import DirPath
 
 
 """ ******************** ACTIVATION ******************** """
-
 def get_layer_activations(model:Any, tokenizer:Any, text:str, target_layer_idx:int|List[int]) -> Tuple[Any,Any]:
     """ Hook Helper: Tokenize inputs and make activation layer hooks """
 
@@ -65,8 +63,23 @@ def get_layer_activations(model:Any, tokenizer:Any, text:str, target_layer_idx:i
     return input_ids[0], activations[0].squeeze(0)
 
 
-""" ******************** PLOTTING ******************** """
 
+""" ******************** PLOTLY INTERACTIVE COLORED TOKENS ******************** """
+def plot_tokens_plotly(tokens, feature_token_matrix, top_k=10):
+    fig = go.Figure()
+    for i in range(min(top_k, feature_token_matrix.shape[0])):
+        fig.add_trace(go.Heatmap(
+            z=[feature_token_matrix[i].numpy()],
+            x=tokens,
+            y=[f"Feature {i}"],
+            colorscale='RdBu',
+            zmin=0, zmax=feature_token_matrix.max().item()
+        ))
+    fig.update_layout(height=50 * top_k)
+    fig.show()
+
+
+""" ******************** PLOT COLORED TOKENS ******************** """
 def plot_colored_tokens(tokens:Any, scores:Any, cmap:str='coolwarm'):
     """ Plots the colored tokens derived from SAE """
 
@@ -81,170 +94,24 @@ def plot_colored_tokens(tokens:Any, scores:Any, cmap:str='coolwarm'):
     return html
 
 
-def plot_norms(activations:Any, save_path:str) -> None:
-    """ Activation Norms per Layer (single layer SAE):
-            Compute and plot the L2 norm (or other norm) of hidden states or intermediate activations per layer.
-            Quantized models often reduce the range of activation values, which can be detected via shrinking norms.
-        Input example: activations = [layer_data['hidden'] for layer_data in all_layer_outputs.values()] """
-    
-    full_path:str = f"{DirPath.DICT_VIS.value}/actnorms_{save_path}.jpg"
+def colored_tokens_multi_custom(tokens, feature_token_matrix, top_k=10, cmap='coolwarm'):
+    """
+    tokens: list[str] - the tokens from the prompt
+    feature_token_matrix: [num_features x num_tokens] - abs activations per feature/token
+    """
 
-    norms = [torch.norm(activation, dim=-1).mean().item() for activation in activations]
-    
-    plt.rcParams['font.family'] = 'Times New Roman'
-    plt.plot(norms)
-    plt.savefig(full_path)
-    
+    html = ""
+    for i, feature_row in enumerate(feature_token_matrix[:top_k]):
+        norm_scores = (feature_row - feature_row.min()) / (feature_row.max() - feature_row.min() + 1e-5)
+        colors = plt.cm.get_cmap(cmap)(norm_scores.numpy())
 
-def compare_norms(norm_list_fp16:List, norm_list_ptq:List, save_path:str) -> None:
-    """ Compare activation norms
-        Input example:
-            norms_fp16 = [torch.norm(layer['hidden'], dim=-1).mean().item() for layer in fp16_data.values()]
-            norms_ptq = [torch.norm(layer['hidden'], dim=-1).mean().item() for layer in ptq_data.values()]
-            compare_norms(norms_fp16, norms_ptq) """
-    
-    plt.rcParams['font.family'] = 'Times New Roman'
-    plt.figure(figsize=(8,6))
-    
-    plt.plot(norm_list_fp16, label='FP16', marker='o')
-    plt.plot(norm_list_ptq, label='PTQ', marker='x')
-    
-    plt.title("Activation Norms per Layer")
-    plt.xlabel("Layer")
-    plt.ylabel("Mean L2 Norm")
-    plt.legend()
-    plt.grid(True)
-    
-    plt.savefig(f"{DirPath.DICT_VIS.value}/norm_comparison_{save_path}.jpg")
-    plt.show()
+        row_html = f"<b>Feature {i}</b>: "
+        for tok, col in zip(tokens, colors):
+            rgba = f"rgba({int(col[0]*255)}, {int(col[1]*255)}, {int(col[2]*255)}, 0.9)"
+            row_html += f"<span style='background-color:{rgba}; padding:2px; margin:1px; border-radius:4px'>{tok}</span> "
+        html += f"<div style='margin-bottom:5px'>{row_html}</div>"
 
-
-def compare_code_distributions(code_a, code_b) -> Tuple[Any,Any]:
-    """ Wasserstein or KL Divergence Between SAE Code Distributions
-        Useful for comparing latent concept drift between models!
-        Example: compare_code_distributions(fp16_codes, ptq_codes) """
-    
-    # Flatten across tokens
-    a = code_a.flatten().cpu().numpy()
-    b = code_b.flatten().cpu().numpy()
-    
-    # Normalize histograms
-    hist_a, _ = np.histogram(a, bins=100, range=(-5,5), density=True)
-    hist_b, _ = np.histogram(b, bins=100, range=(-5,5), density=True)
-
-    wd = wasserstein_distance(hist_a, hist_b)
-    kl = entropy(hist_a + 1e-8, hist_b + 1e-8)
-    
-    print(f"Wasserstein: {wd:.4f} | KL Div: {kl:.4f}")
-    return wd, kl
-
-
-def visualize_concepts(codes:Any, save_path:str, method:str, layer=None) -> None:
-    """ Project and visualize using PCA / 'pca' or TSNE / 'tsne' """
-
-    full_path:str = f"{DirPath.DICT_VIS.value}/concepts_{save_path}.jpg"
-    codes_np = codes.cpu().numpy()
-
-    if method == 'pca':
-        reducer = PCA(n_components=2)
-    elif method == 'tsne':
-        reducer = TSNE(n_components=2, perplexity=30, learning_rate=200, n_iter=1000)
-    else:
-        raise ValueError("Method must be 'pca' or 'tsne'")
-
-    reduced = reducer.fit_transform(codes_np)
-
-    plt.rcParams['font.family'] = 'Times New Roman'
-    plt.figure(figsize=(8, 6))
-    plt.scatter(reduced[:, 0], reduced[:, 1], alpha=0.7, s=20, c='royalblue')
-
-    title = f"{method.upper()} Projection of SAE Codes"
-    if layer is not None:
-        title += f" (Layer {layer})"
-    
-    plt.title(title)
-    plt.xlabel("Component 1")
-    plt.ylabel("Component 2")
-    plt.grid(True)
-
-    plt.savefig(full_path)
-    plt.show()
-
-
-""" ******************** TOPK ******************** """
-
-def get_top_tokens_per_concept(codes:Any, tokens:Any, top_k:int=5) -> Dict:
-    """ Returns a dict mapping concept neuron index -> top-k tokens that activate it. """
-
-    top_tokens = {}
-    for i in range(codes.shape[1]):  # num of concept neurons
-        concept_vals = codes[:, i]
-        top_indices = torch.topk(concept_vals, k=min(top_k, len(tokens))).indices
-        top_tokens[i] = [tokens[idx] for idx in top_indices]
-    
-    return top_tokens
-
-
-def print_top_concepts(top_tokens_dict:Dict, num_concepts:int=5) -> None:
-    """ Print topk """
-
-    print(f"Top {num_concepts} Concepts & Their Top Tokens:")
-    for i in range(min(num_concepts, len(top_tokens_dict))):
-        print(f"Concept {i:03}: {top_tokens_dict[i]}")
-
-
-""" ******************** MISC ******************** """
-
-def sae_reconstruction(hidden:Any, sae:object) -> torch.Tensor:
-    """ SAE Reconstruction Error (per token / feature)
-        Error between original activations and SAE reconstructions.
-        Usable this as a proxy for how interpretable or compressible the representations are, which may change post-quantization. """
-    
-    recon = sae(hidden)
-    error = torch.nn.functional.mse_loss(recon, hidden)
-
-    return error
-
-
-def cos_sim_compare(fp_acts:Any, ptq_acts:Any, dim:int=1) -> torch.Tensor:
-    """ Cosine Similarity Between Models
-            Compute similarity between activation vectors for same prompt across models.
-            High divergence indicates representation drift post-quantization. """
-    
-    cos = torch.nn.functional.cosine_similarity(fp_acts, ptq_acts, dim)
-    return cos
-
-
-def concept_entropy(codes:Any) -> torch.Tensor:
-    """ Concept Entropy per Token:
-            Tokens with low entropy = few concepts dominate = more interpretable.
-            High entropy = distributed / ambiguous.
-            → can be plotted alongside saliency. """
-    
-    probs = torch.softmax(codes.abs(), dim=1)
-    entropy = -(probs * probs.log()).sum(dim=1)
-    return entropy
-
-
-def dict_orthogonality(dict_weights):
-    """ Dictionary Diversity / Orthogonality:
-            This helps one learn: are the learned concepts distinct?
-            → A high score here means concepts aren't redundant (which is nice!). """
-    
-    # Cosine sim of dictionary atoms
-    normed = F.normalize(dict_weights, dim=1)
-    cosine_sim = normed @ normed.T
-    diversity = 1 - cosine_sim.abs().mean()
-    return diversity
-
-
-def concept_usage(codes):
-    """ Concept Usage Histogram:
-            How often is each concept used (activated) across the dataset?
-            → can plot this to see if a few concepts dominate — or if it's balanced. """
-    
-    usage = (codes.abs() > 0.01).float().sum(dim=0)
-    return usage
+    return HTML(html)
 
 
 """ ******************** SAE ANALYSIS ******************** """
@@ -269,6 +136,7 @@ Activation norms:
 Interpretation:
     Lower average norms might correlate with reduced semantic richness or degraded internal feature geometry.
 """
+
 def run_sae(model:Any, tokenizer:Any, full_path:str, file_name:str, text:str, layer_idx:int) -> Tuple[Any,torch.Tensor]:
     """ Run single layer SAE analysis """
 

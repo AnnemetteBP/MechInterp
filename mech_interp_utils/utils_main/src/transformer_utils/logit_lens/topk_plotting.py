@@ -271,6 +271,7 @@ def _plot_topk_lens(
         plot_kwargs.update({"cmap": "cet_linear_protanopic_deuteranopic_kbw_5_98_c40", "vmin": 0, "vmax": 1})
 
     plt.figure(figsize=(1.6 * (end_ix - start_ix), 0.6 * len(ylabels)))
+    plt.rcParams['font.family'] = 'Times New Roman'
     ax = sns.heatmap(heat_data, **plot_kwargs)
 
     ax.set_yticklabels(ylabels, rotation=0)

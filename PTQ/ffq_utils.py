@@ -48,6 +48,7 @@ def log_quantization_error(orig, quantized, layer_name):
     error = F.mse_loss(orig, quantized).item()
     print(f"[QuantError] {layer_name}: {error:.6f}")
 
+
 # ===================== QuantLinear ============================
 class QuantLinear(nn.Linear):
     def __init__(
@@ -87,9 +88,9 @@ class QuantLinear(nn.Linear):
             f"Mismatch: input {input.shape}, weight {self.weight.shape}"
         
         # Reshape the input to match the expected input size for linear transformation
-        batch_size, seq_len, _ = input.shape  # [1, 14, 3072]
+        batch_size, seq_len, _ = input.shape  
         # Reshape input to [batch_size * seq_len, input_features]
-        input_reshaped = input.view(batch_size * seq_len, -1)  # [14, 3072] for batch_size=1
+        input_reshaped = input.view(batch_size * seq_len, -1) 
 
         if self.q_int_weight is not None and self.scale is not None and self.zero_point is not None:
             scale = self.scale if torch.is_tensor(self.scale) else torch.tensor(self.scale, dtype=self.dtype)
@@ -309,8 +310,12 @@ def apply_FFQ(
         if this_mode == '1.58bit':
             w = module.weight.data.to(torch.float32)
             q_w, tau = quantize_ternary(w)
-            quantized.ternary_weight = q_w.to(dtype)
-            quantized.weight.data = quantized.ternary_weight
+            # SCALE ternary weights with alpha (important!) output = input @ (α * {-1, 0, 1}) else output = input @ {-1, 0, 1}
+            alpha = w.abs().mean()  # Or use something smarter if you want, like layer-wise std or per-channel scaling
+            # BitNet sometimes normalize weights by max(|w|) or use quantiles instead of the mean!
+            q_w_scaled = (q_w * alpha).to(dtype)
+            quantized.ternary_weight = q_w_scaled
+            quantized.weight.data = q_w_scaled  # Optionally used as backup
             #print(f"[1.58-bit] {name} | τ = {tau:.4f}")
         else:
             n_bits = int(this_mode.replace('bit', '').replace('_sym', '').replace('_asym', ''))
@@ -325,7 +330,6 @@ def apply_FFQ(
             quantized.scale = torch.tensor(scale)
             quantized.zero_point = torch.tensor(zp)
             quantized.U = U
-
             #print(f"[{n_bits}-bit] {name} | scale={scale:.4f} zp={zp:.4f}")
 
         set_module_by_name(model, name, quantized)

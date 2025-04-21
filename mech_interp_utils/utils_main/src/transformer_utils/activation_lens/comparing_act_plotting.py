@@ -196,16 +196,16 @@ def compute_activation_metrics(activations, metric="norm"):
 
 
 def _plot_comparing_act_lens(
-    acts_dict_true: Dict[str, np.ndarray],
-    acts_dict_compare: Dict[str, np.ndarray],
-    tokenizer: Any,
-    input_ids: str | Any,
-    start_ix: int,
-    end_ix: int,
-    save_fig_path: str | None = None,
-    metric_name: str = 'abs',
-    metric:str= 'norm',
-    top_down: bool = False
+    acts_dict_true:Dict[str, np.ndarray],
+    acts_dict_compare:Dict[str, np.ndarray],
+    tokenizer:Any,
+    input_ids:str|Any,
+    start_ix:int,
+    end_ix:int,
+    save_fig_path:str|None=None,
+    metric_name:str='abs',
+    metric:str='norm',
+    top_down:bool=False
 ):
     layer_names = list(acts_dict_true.keys())
     num_layers = len(layer_names)
@@ -282,7 +282,7 @@ def _plot_comparing_act_lens(
 
 # ===================== Main Function to Compare Models =====================
 def plot_comparing_act_lens(
-    models:List[Any,Any],
+    models:Tuple[Any,Any],
     tokenizer:Any,
     input_ids:str|Any,
     start_ix:int,
@@ -352,8 +352,7 @@ def plot_comparing_act_lens(
             defines the subset of the model used to "decode" hidden states.
     """
        
-    base_model = models[0]  # True distribution model (FP)
-    comparison_model = models[1]  # Comparison model (Quantized)
+    base_model, comparison_model = models  # True distribution model (FP) and Comparison model (Quantized)
 
     layer_names_base = make_layer_names(
         base_model,

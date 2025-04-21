@@ -290,7 +290,7 @@ def _plot_comparing_lens(
 
 
 def plot_comparing_lens(
-    model:Tuple[Any,Any],
+    models:Tuple[Any,Any],
     tokenizer:Any,
     input_ids:Any,
     start_ix: int,
@@ -312,9 +312,9 @@ def plot_comparing_lens(
 
     Base code for Logit Lens from nostalgebraist (thanks btw) GitHub: https://github.com/nostalgebraist/transformer-utils
 
-    `model`, `tokenizer` and `input_ids` should be familiar from the transformers library.  Other args are documented below.
+    `models`, `tokenizer` and `input_ids` should be familiar from the transformers library.  Other args are documented below.
 
-    Here `model` should be a tuple of two `transformers.PreTrainedModel` with an LLaMA / OLMo architecture
+    Here `models` should be a tuple of two `transformers.PreTrainedModel` with an LLaMA / OLMo architecture
         - to work for e.g., GPT2 see orgiginal nostalgebraist: https://github.com/nostalgebraist/transformer-utils
         - The first model in tuple `model[0]` is used as true distribution for `model[1]`.
 
@@ -390,7 +390,7 @@ def plot_comparing_lens(
         return layer_names_1, layer_names_2
     
 
-    model_1, model_2 = model[0], model[1]
+    model_1, model_2 = models # first is true distribution and second is e.g., quantized model for comparison
 
     layer_names_1, layer_names_2 = multiple_layer_names(model_1=model_1, model_2=model_2)
 

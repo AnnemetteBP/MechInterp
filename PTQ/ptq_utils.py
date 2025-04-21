@@ -209,11 +209,19 @@ def apply_PTQ(
         w = module.weight.data.to(dtype)
 
         if mode == '1.58bit':
-            w = module.weight.data.to(torch.float32) # since τ / tau, set the dtype for quants to float32
+            """w = module.weight.data.to(torch.float32) # since τ / tau, set the dtype for quants to float32
             q_w, tau = quantize_ternary(w)
             quantized.ternary_weight = q_w.to(dtype)
             quantized.weight.data = quantized.ternary_weight
-            print(f"[1.58-bit] {name} | τ = {tau:.4f}")
+            print(f"[1.58-bit] {name} | τ = {tau:.4f}")"""
+            w = module.weight.data.to(torch.float32)
+            q_w, tau = quantize_ternary(w)
+            # SCALE ternary weights with alpha (important!) output = input @ (α * {-1, 0, 1}) else output = input @ {-1, 0, 1}
+            alpha = w.abs().mean()  # Or use something smarter if you want, like layer-wise std or per-channel scaling
+            q_w_scaled = (q_w * alpha).to(dtype)
+            quantized.ternary_weight = q_w_scaled
+            quantized.weight.data = q_w_scaled  # Optionally used as backup
+            #print(f"[1.58-bit] {name} | τ = {tau:.4f}")
         else:
             n_bits = int(mode.replace('bit', '').replace('_sym', '').replace('_asym', ''))
             symmetric = '_sym' in mode

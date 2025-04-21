@@ -1,8 +1,8 @@
 Decoders/
-mech_interp_utils/utils_main/src/transformer_utils/dictionary_learning/
 mech_interp_utils/utils_main/src/transformer_utils/tuned_lens/
 classes/
 logs/
 Outputs/
 private_files/
+tuned-lens-main/
 *__pycache__*
