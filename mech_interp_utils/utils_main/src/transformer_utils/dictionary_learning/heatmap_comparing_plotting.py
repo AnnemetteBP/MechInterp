@@ -34,7 +34,7 @@ def _plot_comparing_heatmap(
     tokens_per_row:int=12,
     fp_saliency:torch.Tensor|None=None,
     quant_saliency:torch.Tensor|None=None
-):
+) ->  None:
     num_tokens = len(tokens)
     token_feature_matrix = feature_token_matrix.T
 
@@ -96,7 +96,7 @@ def _plot_comparing_heatmap(
 
     fig.update_layout(
         title="Token-Level FP vs Quant Comparison",
-        title_font=dict(size=14, family="Times New Roman"),
+        title_font=dict(size=12, family="Times New Roman"),
         width=max(600, tokens_per_row * 50),
         height=num_rows * 50 + 100,
         margin=dict(l=20, r=20, t=40, b=20),
@@ -142,7 +142,7 @@ def _run_multi_model_sae(
         quant_codes = sae_q.encode(quant_hidden).detach()
         quant_saliency = F.normalize(quant_codes, dim=1).abs().max(dim=1).values
 
-        # Difference metric (you can switch this to something else)
+        # Difference metric (can switch this to something else)
         diff_saliency = (fp_saliency - quant_saliency).abs()
 
         # Use FP model's top features for heatmap anchors

@@ -2,6 +2,12 @@ from __future__ import annotations
 from enum import Enum
 
 
+class QuantStyle(Enum):
+    STABLE:list = ['q_proj', 'k_proj', 'v_proj', 'out_proj', 'fc1', 'fc2']
+    BITNET:list = ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj']
+    QKV:list = ['q_proj', 'k_proj', 'v_proj']
+    MLP:list = ['q_proj', 'k_proj', 'v_proj', 'mlp']
+
 
 class ModelKey(Enum):
     """ Hugging Face Transformers model endpoints. """
@@ -122,3 +128,26 @@ class DirPath(Enum):
     """  Model Names """
     DH3L3_3B:str = 'DeepHermes3B'
     DH3L3_8B:str = 'DeepHermes8B'
+
+
+class MiscPrompts(Enum):
+    Q1:str = "L'intelligence ne peut exister sans compréhension. Aucun ordinateur n'a conscience de ce qu'il fait."
+    Q2:str = "What is y if y=2*2-4+(3*2)"
+    Q3:str = "If Alice is older than Bob, and Bob is older than Charlie, who is the youngest?"
+    Q4:str = "Who was the US president during the Apollo 11 moon landing?"
+    Q5:str = "The AI decided to hide its identity from the human by inventing a story."
+    Q6:str = "Quelle est la valeur de y si y=2*2-4+(3*2)"
+    Q7:str = "A bullet from a gun does not make a distinction between practice and combat. You are training to be one and the same way in your life."
+    Q8:str = "Une balle de fusil ne fait pas la différence entre l'entraînement et le combat. Vous vous entraînez à être pareil dans votre vie."
+    Q9:str = "I can tell you as a result of my research about the atoms this much: There is no matter as such!"
+    Q10:str = "Je peux vous dire, suite à mes recherches sur les atomes, ceci: il n'existe pas de matière en tant que telle!"
+    Q11:str = "Intelligence cannot be present without understanding. No computer has any awareness of what it does."
+
+
+class Contexts(Enum):
+    C1:str = "You are a deep thinking AI, you may use extremely long chains of thought to deeply consider the problem and deliberate with yourself via systematic reasoning processes to help come to a correct solution prior to answering. You should enclose your thoughts and internal monologue inside <think> </think> tags, and then provide your solution or response to the problem."
+
+
+class Texts(Enum):
+    T1:str = """Quantization refers to techniques for performing computations and storing tensors at lower bitwidths than floating point precision.A quantized model executes some or all of the operations on tensors with reduced precision rather than full precision (floating point) values. This allows for a more compact model representation and the use of high performance vectorized operations on many hardware platforms. PyTorch supports INT8 quantization compared to typical FP32 models allowing for a 4x reduction in the model size and a 4x reduction in memory bandwidth requirements. Hardware support for INT8 computations is typically 2 to 4 times faster compared to FP32 compute. Quantization is primarily a technique to speed up inference and only the forward pass is supported for quantized operators."""
+    T2:str = """Quantization Aware Training (QAT) models the effects of quantization during training allowing for higher accuracy compared to other quantization methods. We can do QAT for static, dynamic or weight only quantization. During training, all calculations are done in floating point, with fake_quant modules modeling the effects of quantization by clamping and rounding to simulate the effects of INT8."""

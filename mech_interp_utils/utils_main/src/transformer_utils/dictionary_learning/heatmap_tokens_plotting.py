@@ -32,7 +32,7 @@ def _plot_token_heatmap(
     top_k:int=5,
     saliency:torch.Tensor|None=None,
     tokens_per_row:int=12,
-):
+) -> None:
     num_tokens = len(tokens)
     token_feature_matrix = feature_token_matrix.T  # [num_tokens x top_k_features]
 

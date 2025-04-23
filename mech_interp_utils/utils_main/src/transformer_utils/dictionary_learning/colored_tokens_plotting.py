@@ -27,7 +27,7 @@ def _plot_colored_tokens(
         tokens:Any,
         scores:Any,
         cmap:str='coolwarm'
-    ) -> str:
+) -> str:
     """ Plots the colored tokens derived from SAE """
 
     norm_scores = (scores - scores.min()) / (scores.max() - scores.min() + 1e-5)
@@ -46,7 +46,7 @@ def _plot_multicolored_tokens(
         feature_token_matrix:Any,
         top_k:int=10,
         cmap:str='coolwarm'
-    ) -> HTML:
+) -> HTML:
     """
     tokens: list[str] - the tokens from the prompt
     feature_token_matrix: [num_features x num_tokens] - abs activations per feature/token
@@ -77,7 +77,7 @@ def _run_multi_layer_sae(
         log_path:str|None=None,
         log_name:str|None=None,
         fig_path:str|None=None    
-    ) -> Dict:
+) -> Dict:
     """ Run multi-layer SAE analysis """
 
     all_layer_outputs = {}
@@ -128,9 +128,6 @@ def _run_multi_layer_sae(
 
         all_layer_outputs[f"layer_{layer_idx}"] = layer_data
 
-        if vis_projection is not None:
-            visualize_concepts(codes=codes, full_path=fig_path, method=vis_projection)
-
         if do_log:
             # Save each layer separately
             os.makedirs(log_path, exist_ok=True)
@@ -140,6 +137,9 @@ def _run_multi_layer_sae(
             
             with open(f"{log_path}/{log_name}_tokens_ml.json", 'w') as f:
                 json.dump(tokens, f)
+        
+        if vis_projection is not None:
+            visualize_concepts(codes=codes, full_path=fig_path, method=vis_projection)
 
     return all_layer_outputs
 
@@ -155,7 +155,7 @@ def plot_colored_tokens(
         log_path:str|None=None,
         log_name:str|None=None,
         fig_path:str|None=None
-    ) -> None:
+) -> None:
     """ Plots colored tokens from SAE analysis """
 
     _run_multi_layer_sae(

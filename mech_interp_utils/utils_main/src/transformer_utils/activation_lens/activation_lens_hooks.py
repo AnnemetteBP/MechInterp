@@ -3,7 +3,7 @@ import torch.nn as nn
 
 from ..util.python_utils import make_print_if_verbose
 from ..util.module_utils import get_child_module_by_names
-from PTQ.ptq_utils import QuantLinear
+
 
 _RESID_SUFFIXES = {".self_attn", ".mlp"}
 
