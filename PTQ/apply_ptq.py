@@ -22,9 +22,28 @@ from .ptq_utils import (
 import warnings
 warnings.filterwarnings('ignore')
 
+
+# === Dry Forward for Static Quant Calibration (PTSQ only) ===
+@torch.no_grad()
+def dry_forward(model:nn.Module, dummy_input:torch.Tensor):
+    model.eval()
+    _ = model(dummy_input)
+    print("Dry forward done for calibration (Static PTQ only)")
+
+def get_dummy_input(model, seq_len=128):
+    hidden = model.config.hidden_size
+    return torch.randn(1, seq_len, hidden).to(next(model.parameters()).device)
+
+def text_to_input_ids(tokenizer:Any, text:str) -> torch.Tensor:
+    """ Encode inputs properly for embedding """
+    toks = tokenizer.encode(text, return_tensors="pt")  # LongTensor
+    return toks
+
 # ===================== Main Quantization Logic ============================
 def applyPTQ(
         model:Any,
+        tokenizer:Any,
+        calibration_input:Optional[str|None],
         mode:str='1.58bit',
         ffq:bool=False,
         model_half:bool=False,
@@ -169,6 +188,12 @@ def applyPTQ(
             symmetric=True,
             num_bits=act_bits
         )
+
+        try:
+            dummy_input = text_to_input_ids(tokenizer=tokenizer, text=calibration_input)
+            dummy_input = dummy_input.to(next(model.parameters()).device)  # Move to correct device
+        except Exception:
+            dummy_input = get_dummy_input(model)
 
     print("Quantization complete!")
     return model

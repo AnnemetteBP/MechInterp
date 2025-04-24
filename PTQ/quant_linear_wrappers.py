@@ -32,32 +32,35 @@ class BitLinear(nn.Linear, IQuantLinear):
                  orig:nn.Linear,
                  dtype:torch.dtype,
                  name='unknown') -> None:
-
+        
         nn.Linear.__init__(self, orig.in_features, orig.out_features, bias=(orig.bias is not None))
         IQuantLinear.__init__(self, name=name)
-
+        
         self.weight = nn.Parameter(orig.weight.data.clone())
         self.ternary_weight = None
         self.bias = orig.bias if orig.bias is not None else None
         self.dtype = dtype
 
-    """ Wrapper class for BitNet-style ternary 1.58-bit quantization """
+    """ Wrapper class for BitLinear """
 
-    def forward(self:BitLinear, input:torch.Tensor) -> torch.Tensor:
+    def forward(self: BitLinear, input: torch.Tensor) -> torch.Tensor:
         input = input.to(self.dtype)
-        device = input.device  # <--- detect which device the input is on
+        device = input.device
 
         batch_size, seq_len, _ = input.shape
         input_reshaped = input.view(batch_size * seq_len, -1)
 
-        weight = self.ternary_weight.to(device=device, dtype=self.dtype)  # <--- ensure same device
+        # Use the scaled ternary weight and bias (if any)
+        weight = self.ternary_weight.to(device=device, dtype=self.dtype)
         bias = self.bias.to(device=device, dtype=self.dtype) if self.bias is not None else None
 
+        # Apply matrix multiplication (ternary weight * input)
         output_reshaped = F.linear(input_reshaped, weight, bias)
+
         return output_reshaped.view(batch_size, seq_len, -1)
 
-
-    def dequantize(self:BitLinear, tensor:torch.Tensor) -> torch.Tensor:
+    
+    def dequantize(self: BitLinear, tensor: torch.Tensor) -> torch.Tensor:
         return tensor.float().to(self.dtype)
 
 
@@ -70,7 +73,7 @@ class FFQLinear(IQuantLinear, nn.Linear):
                  name='unknown') -> None:
 
         nn.Linear.__init__(self, orig.in_features, orig.out_features, bias=(orig.bias is not None))
-        IQuantLinear.__init__(self, name=name)  # <- FIXED: safe to call now
+        IQuantLinear.__init__(self, name=name)  # safe to call
 
         self.register_buffer('q_int_weight', None)
         self.register_buffer('scale', None)
@@ -114,7 +117,7 @@ class PTQLinear(IQuantLinear, nn.Linear):
                  name='unknown') -> None:
 
         nn.Linear.__init__(self, orig.in_features, orig.out_features, bias=(orig.bias is not None))
-        IQuantLinear.__init__(self, name=name)  # <- FIXED: safe to call now
+        IQuantLinear.__init__(self, name=name)  # <- safe to call
 
         self.register_buffer('q_int_weight', None)
         self.register_buffer('scale', None)

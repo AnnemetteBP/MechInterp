@@ -34,6 +34,14 @@ def save_tokenizer(tokenizer, save_path:str) -> None:
     print(f"Tokenizer saved to {save_path}")
 
 
+def get_weights(model):
+    ws = []
+    for name, param in model.named_parameters():
+        if 'weight' in name:  
+            ws.append(param.data)
+            
+    return ws
+
 
 def check_quant_config(model:Any) -> None:
     """ Check if the model has the attribute indicating 8-bit or 4-bit quantization """

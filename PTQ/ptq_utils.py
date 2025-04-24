@@ -170,3 +170,5 @@ def fusion_frame_transform(tensor, redundancy:int=2):
 def inverse_fusion_frame_transform(V, U):
     # Reconstruct original tensor via pseudo-inverse
     return V @ torch.pinverse(U.T)
+
+
