@@ -167,8 +167,11 @@ def fusion_frame_transform(tensor, redundancy:int=2):
     V = tensor @ U.T  # [out_features, B * in_features]
     return V, U
 
-def inverse_fusion_frame_transform(V, U):
+"""def inverse_fusion_frame_transform(V, U):
     # Reconstruct original tensor via pseudo-inverse
-    return V @ torch.pinverse(U.T)
+    return V @ torch.pinverse(U.T)"""
 
-
+def inverse_fusion_frame_transform(V, U):
+    # Ensure same dtype before matrix multiply for float16 quantization
+    U_pinv = torch.pinverse(U.T).to(V.dtype)
+    return V @ U_pinv

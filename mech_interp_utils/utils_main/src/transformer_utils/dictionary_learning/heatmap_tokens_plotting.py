@@ -71,7 +71,7 @@ def _plot_token_heatmap(
         text=text,
         hoverinfo="text",
         hovertext=hovertext,
-        colorscale='BuPu_r',  # Similar to seaborn 'coolwarm'  'RdBu', 'RdBu_r', 'Plotly3'
+        colorscale='BuPu_r',  # Similar to seaborn 'coolwarm'  (try 'RdBu', 'RdBu_r', 'Plotly3')
         reversescale=True,
         showscale=True,
         texttemplate="%{text}",
@@ -133,7 +133,6 @@ def _run_multi_layer_sae(
 
         all_layer_outputs[f"layer_{layer_idx}"] = layer_data
         #feature_token_matrix = codes.abs().T
-        # Rank neurons by total activation
         # Rank neurons by total activation
         total_per_feature = codes.abs().sum(dim=0)  # shape: [dict_size]
         topk_indices = total_per_feature.topk(top_k).indices

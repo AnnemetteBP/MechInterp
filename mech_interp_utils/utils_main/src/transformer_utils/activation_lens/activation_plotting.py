@@ -49,23 +49,7 @@ def collect_activations(model, input_ids, layer_names):
     activations = {name: model._activations[name].cpu().numpy() for name in layer_names}
     return activations, layer_names
 
-
 """def compute_activation_metrics(activations, metric="norm"):
-    
-    #Given a dict of activations, computes a metric (e.g., norm) for each.
-    #Returns a dict of the same structure with scalar values per token per layer.
-    
-    metric_fn = {
-        "norm": lambda x: np.linalg.norm(x, axis=-1),
-        "var": lambda x: np.var(x, axis=-1),
-        "entropy": lambda x: -np.sum(x * np.log(x + 1e-9), axis=-1)
-    }.get(metric)
-
-    if metric_fn is None:
-        raise ValueError(f"Unsupported metric: {metric}")
-
-    return {name: metric_fn(act) for name, act in activations.items()}"""
-def compute_activation_metrics(activations, metric="norm"):
     def safe_entropy(x):
         # Softmax over last dim to turn activations into pseudo-probs
         probs = np.exp(x - np.max(x, axis=-1, keepdims=True))
@@ -86,7 +70,39 @@ def compute_activation_metrics(activations, metric="norm"):
     return {
         name: metric_fn(act).squeeze()
         for name, act in activations.items()
-    }
+    }"""
+
+def compute_activation_metrics(activations, metric="norm", normalize=True, clip_percentile=99.9):
+    def safe_entropy(x):
+        # Softmax over last dim to turn activations into pseudo-probs
+        probs = np.exp(x - np.max(x, axis=-1, keepdims=True))
+        #temperature = 1.0  # Lower values (e.g., 0.5) make distributions sharper
+        #probs = np.exp(x / temperature - np.max(x / temperature, axis=-1, keepdims=True))
+        probs /= np.sum(probs, axis=-1, keepdims=True)
+        return -np.sum(probs * np.log(probs + 1e-9), axis=-1)
+
+    metric_fn = {
+        "norm": lambda x: np.linalg.norm(x, axis=-1),
+        "var": lambda x: np.var(x, axis=-1),
+        "entropy": safe_entropy
+    }.get(metric)
+
+    if metric_fn is None:
+        raise ValueError(f"Unsupported metric: {metric}")
+
+    result = {}
+    for name, act in activations.items():
+        # normalization to avoid overflow in float16
+        if normalize:
+            act = act.astype(np.float32)  # temp upcast for safety
+            scale = np.percentile(np.abs(act), clip_percentile) + 1e-6
+            act = np.clip(act, -scale, scale)
+            act = act / scale
+
+        result[name] = metric_fn(act).squeeze()
+
+    return result
+
 
 # ===================== Plot Activation Lens =====================
 def _plot_activation_lens(

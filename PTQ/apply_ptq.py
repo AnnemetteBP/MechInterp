@@ -51,7 +51,7 @@ def applyPTQ(
         layers_to_quant:Optional[List[str]|None]=None,
         act_quant:bool=False,
         act_bits:int=8,
-        dropout_prob:float=0.1,  # ← 10% dropout during quantization
+        dropout_prob:float=0.1, 
         redundancy:int=2,
         frame_dropout_prob:float=0.0
     ) -> Any:
@@ -134,7 +134,8 @@ def applyPTQ(
             q_w_scaled = (q_w * alpha).to(dtype)
 
             quantized.ternary_weight = q_w_scaled
-            quantized.weight.data = q_w_scaled  # Optional
+            quantized.weight.data = q_w_scaled  # Opt!
+            print(f"[1.58-bit] {name} | τ = {tau:.4f}")
 
         elif ffq and 'bit' in this_mode:
             quantized = FFQLinear(module, dtype=dtype, dropout_prob=dropout_prob, name=name)
@@ -158,7 +159,8 @@ def applyPTQ(
             quantized.scale = torch.tensor(scale)
             quantized.zero_point = torch.tensor(zp)
             quantized.U = U
-        
+            print(f"[{n_bits}-bit] {name} | scale={scale:.4f} zp={zp:.4f}")
+
         else:
             quantized = PTQLinear(module, dtype=dtype, dropout_prob=dropout_prob, name=name)
             w = module.weight.data.to(dtype)
@@ -170,7 +172,7 @@ def applyPTQ(
             quantized.q_int_weight = q_int
             quantized.scale = torch.tensor(scale) # redundant probably
             quantized.zero_point = torch.tensor(zp) # redundant probably
-            #print(f"[{n_bits}-bit] {name} | scale={scale:.4f} zp={zp:.4f}")
+            print(f"[{n_bits}-bit] {name} | scale={scale:.4f} zp={zp:.4f}")
 
         set_module_by_name(model, name, quantized)
         #print(f"[QuantLinear WRAP] Replacing {name} | Orig weight shape: {module.weight.shape}")
@@ -191,7 +193,7 @@ def applyPTQ(
 
         try:
             dummy_input = text_to_input_ids(tokenizer=tokenizer, text=calibration_input)
-            dummy_input = dummy_input.to(next(model.parameters()).device)  # Move to correct device
+            dummy_input = dummy_input.to(next(model.parameters()).device)  
         except Exception:
             dummy_input = get_dummy_input(model)
 

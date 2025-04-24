@@ -19,7 +19,8 @@ class SAE(nn.Module):
         self.sparsity_lambda = sparsity_lambda
 
 
-    def forward(self:SAE, x) -> Tuple[Any,Any]:
+    def forward(self:SAE, x) -> Tuple[Any, Any]:
+        x = x.to(self.encoder.weight.dtype)  # auto match dtype for float16
         code = self.encoder(x)
         reconstruction = self.decoder(code)
         
@@ -35,16 +36,20 @@ class SAE(nn.Module):
         for epoch in range(epochs):
             epoch_loss = 0
             for batch, in loader:
+                batch = batch.to(self.encoder.weight.dtype)  # match dtype for forward to work for float16
                 recon, code = self.forward(batch)
-                loss = F.mse_loss(recon, batch) + self.sparsity_lambda * code.abs().mean()
+
+                # convert both to float32 for stable loss calculation
+                loss = F.mse_loss(recon.float(), batch.float()) + self.sparsity_lambda * code.abs().mean()
+                
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
                 epoch_loss += loss.item()
-            losses.append(epoch_loss)
         
         return losses
 
 
     def encode(self:SAE, x:Any) -> Any:
+        x = x.to(self.encoder.weight.dtype)  # Ensure dtype e.g., float16 matches encoder weights
         return self.encoder(x)

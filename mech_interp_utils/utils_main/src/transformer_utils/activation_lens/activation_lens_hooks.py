@@ -14,7 +14,7 @@ def unquantize_tensor(tensor):
 
 
 def blocks_input_locator(model: nn.Module):
-    return lambda: model.embed_tokens  # OLMo input embeddings
+    return lambda: model.embed_tokens 
 
 def final_layernorm_locator(model: nn.Module):
     if hasattr(model.base_model, "norm"):
