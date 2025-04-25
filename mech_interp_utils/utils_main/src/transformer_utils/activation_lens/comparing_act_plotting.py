@@ -5,8 +5,6 @@ from functools import partial
 from typing import Tuple, List, Dict, Union, Any
 import torch
 import numpy as np
-from scipy.spatial.distance import jensenshannon
-from scipy.stats import wasserstein_distance, wasserstein_distance_nd
 from scipy.stats import entropy
 from sklearn.metrics.pairwise import cosine_similarity
 import scipy.special

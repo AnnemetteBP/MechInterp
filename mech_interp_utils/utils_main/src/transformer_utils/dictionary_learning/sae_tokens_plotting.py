@@ -144,7 +144,7 @@ def _run_multi_layer_sae(
     return all_layer_outputs
 
 
-def plot_colored_tokens(
+def plot_sae_tokens(
         model:Any,
         tokenizer:Any,
         inputs:Any,

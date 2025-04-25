@@ -45,6 +45,9 @@ def applyPTQ(
         tokenizer:Any,
         calibration_input:Optional[str|None],
         mode:str='1.58bit',
+        qkv_safety:bool=True,
+        skip_quant:bool=False,
+        fused_qkv:bool=False,
         ffq:bool=False,
         model_half:bool=False,
         quant_half:bool=False,
@@ -52,7 +55,7 @@ def applyPTQ(
         act_quant:bool=False,
         act_bits:int=8,
         dropout_prob:float=0.1, 
-        redundancy:int=2,
+        redundancy:int=1, # or 2, ...
         frame_dropout_prob:float=0.0
     ) -> Any:
 
@@ -94,37 +97,38 @@ def applyPTQ(
 
     print(f"|| Quant Configs: {mode} | dtype: {dtype} | dropout prob: {dropout_prob} | {'FFQ' if ffq else 'PTQ'} as: {'PTSQ' if act_quant else 'PTDQ'} ||")
 
-    def get_quant_policy(name:str):
-        """ Dynamically define how each layer should be quantized """
+    def get_quant_policy(name: str) -> Tuple[bool, str, int]:
+        """ Dynamically define quantization policy per layer. """
         quantize = True
         this_mode = mode
         this_redundancy = redundancy
 
-        # Never quantize these
-        if any(skip in name for skip in ['embed_tokens', 'lm_head', 'norm', 'layernorm']):
-            quantize = False
+        # Respect explicit layer targeting
+        if layers_to_quant is not None:
+            quantize = any(layer in name for layer in layers_to_quant)
 
-        # Q/K/V projections: use safer config
-        if any(proj in name for proj in ['q_proj', 'k_proj', 'v_proj']):
-            #this_mode = '8bit_sym'  # Use higher-precision quantization
-            this_redundancy = 1
+        elif skip_quant:
+            if any(skip in name for skip in ['embed_tokens', 'lm_head', 'norm', 'layernorm']):
+                quantize = False
+
+        # Handle QKV safety fallback
+        if qkv_safety:
+            if any(proj in name for proj in ['q_proj', 'k_proj', 'v_proj']):
+                this_redundancy = 1
 
         return quantize, this_mode, this_redundancy
+
 
     def quantize_and_replace(name, module):
         quantize, this_mode, this_redundancy = get_quant_policy(name)
         if not quantize:
-            print(f"[SKIP] {name} | Policy: skip quantization")
+            print(f"[SKIP] {name} | Policy: Skip quantization")
             return
 
-        # Avoid fused QKV (already handled)
-        if any(k in name.lower() for k in ['qkv', 'qkvs', 'qk_proj', 'proj_qkv']) and module.weight.shape[0] % 3 == 0:
-            print(f"[SKIP] {name} | Likely fused QKV projection")
-            return
-
-        if module.weight.shape[0] != module.weight.shape[1]:
-            print(f"[SKIP] {name} | Non-square weight: {module.weight.shape}")
-            return
+        if not fused_qkv:
+            if any(k in name.lower() for k in ['qkv', 'qkvs', 'qk_proj', 'proj_qkv']) and module.weight.shape[0] % 3 == 0:
+                print(f"[SKIP] {name} | Likely fused QKV projection")
+                return
         
         if this_mode == '1.58bit':
             quantized = BitLinear(module, dtype=dtype, name=name)
@@ -135,9 +139,15 @@ def applyPTQ(
 
             quantized.ternary_weight = q_w_scaled
             quantized.weight.data = q_w_scaled  # Opt!
-            print(f"[1.58-bit] {name} | τ = {tau:.4f}")
+            
+            print(f"[1.58-bit] {name} | τ={tau:.4f} | α={alpha:.4f} | shape={w.shape}")
+            set_module_by_name(model, name, quantized)
+            return
 
         elif ffq and 'bit' in this_mode:
+            if module.weight.shape[0] != module.weight.shape[1]:
+                print(f"[SKIP][FFQ] {name} | Non-square weight: {module.weight.shape}")
+                return
             quantized = FFQLinear(module, dtype=dtype, dropout_prob=dropout_prob, name=name)
             w = module.weight.data.to(dtype)
 
@@ -159,7 +169,10 @@ def applyPTQ(
             quantized.scale = torch.tensor(scale)
             quantized.zero_point = torch.tensor(zp)
             quantized.U = U
-            print(f"[{n_bits}-bit] {name} | scale={scale:.4f} zp={zp:.4f}")
+            
+            print(f"[FFQ-{n_bits}bit] {name} | scale={scale:.4f} zp={zp:.4f} | shape={w.shape}")
+            set_module_by_name(model, name, quantized)
+            return
 
         else:
             quantized = PTQLinear(module, dtype=dtype, dropout_prob=dropout_prob, name=name)
@@ -172,9 +185,12 @@ def applyPTQ(
             quantized.q_int_weight = q_int
             quantized.scale = torch.tensor(scale) # redundant probably
             quantized.zero_point = torch.tensor(zp) # redundant probably
-            print(f"[{n_bits}-bit] {name} | scale={scale:.4f} zp={zp:.4f}")
+            
+            print(f"[PTQ-{n_bits}bit] {name} | scale={scale:.4f} zp={zp:.4f} | shape={w.shape}")
+            set_module_by_name(model, name, quantized)
+            return
 
-        set_module_by_name(model, name, quantized)
+        #set_module_by_name(model, name, quantized)
         #print(f"[QuantLinear WRAP] Replacing {name} | Orig weight shape: {module.weight.shape}")
 
     for name, module in model.named_modules():

@@ -1,12 +1,9 @@
 from __future__ import annotations
 from typing import Tuple, List, Dict, Literal, Optional, Any
 
-from functools import partial
 from typing import Tuple, List, Dict, Union, Any
 import torch
 import numpy as np
-from scipy.spatial.distance import jensenshannon
-from scipy.stats import wasserstein_distance, wasserstein_distance_nd
 from scipy.stats import entropy
 import scipy.special
 import seaborn as sns

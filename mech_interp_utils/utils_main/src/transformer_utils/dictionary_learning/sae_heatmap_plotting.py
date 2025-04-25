@@ -159,7 +159,7 @@ def _run_multi_layer_sae(
     return all_layer_outputs
 
 
-def plot_token_heatmap(
+def plot_sae_heatmap(
         model:Any,
         tokenizer:Any,
         inputs:Any,
