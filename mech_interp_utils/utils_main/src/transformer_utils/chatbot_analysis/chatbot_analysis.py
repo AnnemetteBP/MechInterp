@@ -164,8 +164,9 @@ def run_chatbot_analysis(
 
     default_params = {
         'context': "You are a deep thinking AI, you may use extremely long chains of thought to deeply consider the problem and deliberate with yourself via systematic reasoning processes to help come to a correct solution prior to answering. You should enclose your thoughts and internal monologue inside <think> </think> tags, and then provide your solution or response to the problem.",
-        'prompt': "Who was the US president during the Apollo 11 moon landing?",
-        'max_new_tokens': 250,
+        #'prompt': "Who was the US president during the Apollo 11 moon landing?",
+        'prompt': "What is y if y=2*2-4+(3*2)",
+        'max_new_tokens': 50,
         'temperature': 0.8,
         'repetition_penalty': 1.0,
         'sample': True,

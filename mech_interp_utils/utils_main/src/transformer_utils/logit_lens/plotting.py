@@ -60,6 +60,8 @@ def postprocess_logits(layer_logits:Any, normalize_probs:bool=False) -> Tuple[An
     Only quantizing: layers_to_quant=['q_proj', 'k_proj', 'v_proj', 'out_proj', 'fc1', 'fc2'] avoids this.
     However, this ONLY resolves not plotting a mostly empty logits plot!
     """
+    if layer_logits.dtype == np.float16:
+        layer_logits = layer_logits.astype(np.float32)
     
     layer_logits = np.nan_to_num(layer_logits, nan=-1e9, posinf=1e9, neginf=-1e9)
     # Compute softmax for probabilities

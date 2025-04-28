@@ -13,7 +13,6 @@ def unquantize_tensor(tensor):
     """
     if hasattr(tensor, "dequantize"):
         return tensor.dequantize()
-    
     return tensor.float()
 
 

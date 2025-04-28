@@ -20,19 +20,25 @@ class ModelKey(Enum):
     DEEP8B = 'NousResearch/DeepHermes-3-Llama-3-8B-Preview'
     HFBIT1 = 'HF1BitLLM/Llama3-8B-1.58-100B-tokens'
     LLINSTRUCT8B:str = 'NousResearch/Meta-Llama-3.1-8B-Instruct'
+    OLMO_1B = 'allenai/OLMo-1B-hf'
+    OLMO_7B = 'allenai/OLMo-7B-hf'
 
 
 class FPKey(Enum):
     """ Base FP Models and Tokenizers (NousResearch/DeepHermes-3-Llama-3-3/8B-Preview) """
 
-    FP16_3B:str = 'Decoders/NousResearch/DeepHermes3B/DeepHermes-3-Llama-3-3B-Preview-fp16'
+    FP_3B:str = 'Decoders/NousResearch/DeepHermes3B/DeepHermes-3-Llama-3-3B-Preview-fp16'
     TOKENIZER_3B:str = 'Decoders/NousResearch/DeepHermes3B/DeepHermes-3-Llama-3-3B-Preview-Tokenizer'
-    FP16_8B:str = 'Decoders/NousResearch/DeepHermes8B/DeepHermes-3-Llama-3-8B-Preview-fp16'
+    FP_8B:str = 'Decoders/NousResearch/DeepHermes8B/DeepHermes-3-Llama-3-8B-Preview-fp16'
     TOKENIZER_8B:str = 'Decoders/NousResearch/DeepHermes8B/DeepHermes-3-Llama-3-8B-Preview-Tokenizer'
     HFBIT1_8B:str = 'Decoders/HF1BitLLM/Llama3-8B-1.58-100B-tokens'
     HFBIT1_TOKENIZER:str = 'Decoders/HF1BitLLM/Llama3-8B-1.58-100B-tokens-tokenizer'
     LINSTRUCT_8B:str = 'Decoders/NousResearch/LlamaInstruct8B/Meta-Llama-3.1-8B-Instruct'
     LINSTRUCT_TOKENIZER:str = 'Decoders/NousResearch/LlamaInstruct8B/Meta-Llama-3.1-8B-Instruct-tokenizer'
+    OLMO7B_FP:str = 'Decoders/allenai/7B/OLMo-7B-hf-fp'
+    OLMO7B_TOkENIZER:str = 'Decoders/allenai/7B/OLMo-7B-hf-tokenizer'
+    OLMO1B_FP:str = 'Decoders/allenai/1B/OLMo-1B-hf-fp'
+    OLMO1B_TOkENIZER:str = 'Decoders/allenai/1B/OLMo-1B-hf-tokenizer'
 
 
 class PTDQKey3B(Enum):

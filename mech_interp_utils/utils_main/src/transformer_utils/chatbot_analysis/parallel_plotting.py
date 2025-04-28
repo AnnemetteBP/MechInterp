@@ -24,19 +24,27 @@ def _parallel_plot(
         dimensions = [
             'Model', 'Perplexity', 'Latency (s)',
             'CPU Usage (%)', 'RAM Usage (%)', 'GPU Memory (MB)',
-            'Activation Similarity', 'Last Layer Activation Std', 'Logit Std',
-            'Token Count', 'Precision'
+            'Logit Std', 'Last Layer Activation Std', 'Activation Similarity',
         ]
 
     # --- 'Model' is First Dimension ---
     if 'Model' not in dimensions:
         dimensions = ['Model'] + dimensions
 
+    # --- Prepare Data ---
     df = df.copy()
     df['Model'] = df['Model'].astype(str)
     models = sorted(df['Model'].unique())
     model_indices = {model: i for i, model in enumerate(models)}
     df['Model Index'] = df['Model'].map(model_indices)
+
+    # Encode non-numeric dimension columns
+    for col in dimensions:
+        if col != "Model" and not pd.api.types.is_numeric_dtype(df[col]):
+            df[col] = df[col].astype('category').cat.codes
+
+    # Remove NaNs
+    df = df.dropna(subset=dimensions)
 
     # --- Colors ---
     default_colors = px.colors.qualitative.Bold + px.colors.qualitative.Set2 + px.colors.qualitative.Dark24
@@ -46,8 +54,15 @@ def _parallel_plot(
 
     # --- Build Dimensions ---
     parcoords_dims = [
-        dict(label="Model", values=df["Model Index"], tickvals=list(model_indices.values()), ticktext=list(model_indices.keys()))
+        dict(
+            label="Model",
+            values=df["Model Index"],
+            tickvals=[],  # Empty tickvals to remove the axis indexing
+            ticktext=[],  # Empty ticktext to remove the axis labels
+            range=[-0.5, len(models) - 0.5]  # Adjust range for padding on the left and right
+        )
     ]
+
     for col in dimensions:
         if col != "Model":
             parcoords_dims.append(dict(label=col, values=df[col]))
@@ -66,7 +81,7 @@ def _parallel_plot(
         )
     )
 
-    # --- Add Custom Legend using Dummy Scatter Traces ---
+    # --- Add Custom Legend ---
     for model in models:
         fig.add_trace(go.Scatter(
             x=[None], y=[None],
@@ -81,12 +96,11 @@ def _parallel_plot(
         #title=title or "Model Comparison (Discrete Colors)",
         plot_bgcolor='white',
         paper_bgcolor='white',
-        margin=dict(l=50, r=50, t=50, b=50),
+        margin=dict(l=100, r=100, t=50, b=50),  # Increased left and right margins
         font=dict(size=12),
         legend=dict(title="Model", orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5)
     )
 
-    # --- Save or Show ---
     if fig_path:
         fig.write_html(fig_path)
         print(f"Saved plot to: {fig_path}")
