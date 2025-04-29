@@ -15,3 +15,5 @@ nnsight
 einops
 
 plotly
+
+datasets[vision]

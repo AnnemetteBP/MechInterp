@@ -15,7 +15,7 @@ warnings.filterwarnings('ignore')
 
 # ===================== Ternary quant wrapper ============================ 
 class BitLinear(IQuantLinear, nn.Module):
-    def __init__(self:BitLinear,
+    def __init__(self,
                 orig:nn.Linear,
                 dtype:torch.dtype,
                 name='unknown',
@@ -42,7 +42,6 @@ class BitLinear(IQuantLinear, nn.Module):
         self.debugger = None
         self.plotting = plotting  
 
-        # Buffers
         self.register_buffer('orig_weight', orig.weight.data.clone())
         if self.has_bias:
             self.bias = nn.Parameter(orig.bias.data.clone())
@@ -107,50 +106,76 @@ class BitLinear(IQuantLinear, nn.Module):
         unpacked_ternary = (self.ternary_weight.float() - 1)  # 0,1,2 → -1,0,1
         return unpacked_ternary * self.alpha
 
+    
+    def dequantize_activation(self: BitLinear, act_int8: torch.Tensor) -> torch.Tensor:
+        scale = self.act_scale.item()
+        out = act_int8.float() * scale
+        return torch.nan_to_num(out, nan=0.0, posinf=1e4, neginf=-1e4)
 
-    def quantize_activation(self:BitLinear, input:torch.Tensor) -> torch.Tensor:
-        """ Quantize activations to n-bit symmetric integer values. """
+
+    def quantize_activation(self: BitLinear, input: torch.Tensor, return_int: bool = False) -> torch.Tensor:
         if not hasattr(self, 'act_scale'):
             return input
-        
+
         n_bits = self.act_bits
-        qmin = -(2 ** (n_bits - 1) - 1)
+        #qmin = -(2 ** (n_bits - 1) - 1)
+        #qmax = (2 ** (n_bits - 1)) - 1
+        qmin = -(2 ** (n_bits - 1))
         qmax = (2 ** (n_bits - 1)) - 1
-        scale = self.act_scale.item()
+        scale = max(self.act_scale.item(), 1e-5)  # avoid div by near-zero
 
-        input_int = (input / scale).round().clamp(qmin, qmax)
-        input_dequant = input_int * scale
+        input_int = (input / scale).round().clamp(qmin, qmax).to(torch.int8)
 
-        # In quantize_activation, modify this:
-        if self.debug and self.debugger is not None:
-            self.debugger.compare_activations(self.name, input, input_dequant)
-        elif self.plotting:
-            self.plot_activation(input, input_dequant)
+        if self.debug:
+            print(f"[{self.name}] Act q range: {input_int.min().item()} to {input_int.max().item()}")
+
+        self.last_quantized_act = input_int.detach().cpu()
+
+        if return_int:
+            return input_int
+        else:
+            input_dequant = input_int.float() * scale
+            input_dequant = torch.nan_to_num(input_dequant, nan=0.0, posinf=1e4, neginf=-1e4)
+
+            if self.debug and self.debugger is not None:
+                self.debugger.compare_activations(self.name, input, input_dequant)
+            elif self.plotting:
+                self.plot_activation(input, input_dequant)
+
+            return input_dequant
 
 
-        return input_dequant
-    
-    def freeze_quantization(self:BitLinear):
-        self.debug = False
-        if self.act_quant and not self.act_scale_initialized: # minimal unless tracking hooks etc.
-            raise RuntimeError(f"Activation scale for {self.name} not calibrated yet!")
-
-    def calibrate_activation(self:BitLinear, input:torch.Tensor, act_bits:int=8, force:bool=False, percentile:float=0.9999):
-        """ Find the scale for activation quantization using percentile calibration """
+    def calibrate_activation(self: BitLinear, input: torch.Tensor, act_bits: int = 8, force: bool = False, percentile: float = 0.9999):
         if self.act_quant and (not self.act_scale_initialized or force):
             qmax = (2 ** (act_bits - 1)) - 1
-            abs_input = input.abs().flatten()
+            abs_input = input.clone().detach().abs().flatten()
+
+            if abs_input.numel() == 0:
+                print(f"[WARN] Empty input in {self.name} during calibration.")
+                return
+
             k = int(abs_input.numel() * percentile)
-            k = max(k, 1)
+            k = min(max(k, 1), abs_input.numel())  # clip to valid range
 
             topk_val, _ = torch.topk(abs_input, k, largest=True, sorted=True)
             max_val = topk_val[-1]
 
-            scale = max(max_val.item(), 1e-5) / qmax   # epsilon
+            # Use mean instead of max for scaling factor
+            mean_val = abs_input.mean()
+
+            # Avoid overly small scaling factors
+            scale = max(mean_val.item(), 1e-5) / qmax
             self.act_scale.copy_(torch.tensor(scale, device=self.act_scale.device))
             self.act_scale_initialized = True
 
-            print(f"[Calibration] {self.name} | Max Activation: {max_val.item():.5f} | Scale: {scale:.8f}")
+            print(f"[DEBUG] {self.name} input stats -> min: {input.min().item():.5e}, max: {input.max().item():.5e}, std: {input.std().item():.5e}")
+            print(f"[{self.name}] Calib input stats — mean: {input.mean():.4e}, std: {input.std().item():.4e}, min: {input.min().item():.4f}, max: {input.max().item():.4f}")
+            print(f"[Calibration] {self.name} | Max Activation: {max_val.item():.5f} | Mean Activation: {mean_val.item():.5f} | Scale: {scale:.8f}")
+
+    def freeze_quantization(self:BitLinear):
+        self.debug = False
+        if self.act_quant and not self.act_scale_initialized: # minimal unless tracking hooks etc.
+            raise RuntimeError(f"Activation scale for {self.name} not calibrated yet!")
 
     
     def forward(self:BitLinear, input:torch.Tensor) -> torch.Tensor:
@@ -160,6 +185,8 @@ class BitLinear(IQuantLinear, nn.Module):
 
         if self.act_quant and self.act_scale_initialized:
             input = self.quantize_activation(input)
+            #input_int8 = self.quantize_activation(input, return_int=True)
+
 
         weight = self.dequantize() if self.use_ternary else self.orig_weight
         if weight.dtype != input.dtype:
