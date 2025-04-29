@@ -5,6 +5,7 @@ from enum import Enum
 class QuantStyle(Enum):
     STABLE:list = ['q_proj', 'k_proj', 'v_proj', 'out_proj', 'fc1', 'fc2']
     BITNET:list = ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj']
+    SAFE_BITNET:list = ['k_proj', 'v_proj', 'o_proj', 'up_proj', 'down_proj']
     QKV:list = ['q_proj', 'k_proj', 'v_proj']
     MLP:list = ['q_proj', 'k_proj', 'v_proj', 'mlp']
 
@@ -19,9 +20,10 @@ class ModelKey(Enum):
     DEEP3B = 'NousResearch/DeepHermes-3-Llama-3-3B-Preview'
     DEEP8B = 'NousResearch/DeepHermes-3-Llama-3-8B-Preview'
     HFBIT1 = 'HF1BitLLM/Llama3-8B-1.58-100B-tokens'
-    LLINSTRUCT8B:str = 'NousResearch/Meta-Llama-3.1-8B-Instruct'
+    LLINSTRUCT8B = 'NousResearch/Meta-Llama-3.1-8B-Instruct'
     OLMO_1B = 'allenai/OLMo-1B-hf'
     OLMO_7B = 'allenai/OLMo-7B-hf'
+    OLMO_7B_2T = 'allenai/OLMo-7B-Twin-2T-hf'
 
 
 class FPKey(Enum):
@@ -36,9 +38,11 @@ class FPKey(Enum):
     LINSTRUCT_8B:str = 'Decoders/NousResearch/LlamaInstruct8B/Meta-Llama-3.1-8B-Instruct'
     LINSTRUCT_TOKENIZER:str = 'Decoders/NousResearch/LlamaInstruct8B/Meta-Llama-3.1-8B-Instruct-tokenizer'
     OLMO7B_FP:str = 'Decoders/allenai/7B/OLMo-7B-hf-fp'
-    OLMO7B_TOkENIZER:str = 'Decoders/allenai/7B/OLMo-7B-hf-tokenizer'
+    OLMO7B_TOKENIZER:str = 'Decoders/allenai/7B/OLMo-7B-hf-tokenizer'
     OLMO1B_FP:str = 'Decoders/allenai/1B/OLMo-1B-hf-fp'
-    OLMO1B_TOkENIZER:str = 'Decoders/allenai/1B/OLMo-1B-hf-tokenizer'
+    OLMO1B_TOKENIZER:str = 'Decoders/allenai/1B/OLMo-1B-hf-tokenizer'
+    OLMO7B2T_FP:str = 'Decoders/allenai/7B2T/OLMo-7B-Twin-2T-hf-fp'
+    OLMO7B2T_TOKENIZER:str = 'Decoders/allenai/7B2T/OLMo-7B-Twin-2T-hf-tokenizer'
 
 
 class PTDQKey3B(Enum):
