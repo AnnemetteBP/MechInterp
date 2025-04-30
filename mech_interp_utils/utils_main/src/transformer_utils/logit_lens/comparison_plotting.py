@@ -56,8 +56,8 @@ def postprocess_logits(layer_logits:Any, normalize_probs:bool=False) -> Tuple[An
     However, this ONLY resolves not plotting a mostly empty logits plot!
     """
 
-    """if layer_logits.dtype == np.float16:
-        layer_logits = layer_logits.astype(np.float32)"""
+    if layer_logits.dtype == np.float16:
+        layer_logits = layer_logits.astype(np.float32)
     
     # Replace NaNs/Infs before softmax
     layer_logits = np.nan_to_num(layer_logits, nan=-1e9, posinf=1e9, neginf=-1e9)

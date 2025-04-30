@@ -71,6 +71,9 @@ def collect_logits(model, input_ids, layer_names, decoder_layer_names):
 
 # ===================== Post-process logits ============================
 def postprocess_logits(layer_logits: Any, normalize_probs: bool = False) -> Tuple[Any, Any]:
+    if layer_logits.dtype == np.float16:
+        layer_logits = layer_logits.astype(np.float32)
+
     layer_logits = np.nan_to_num(layer_logits, nan=-1e9, posinf=1e9, neginf=-1e9)
     layer_probs = scipy.special.softmax(layer_logits, axis=-1)
     layer_probs = np.nan_to_num(layer_probs, nan=1e-10, posinf=1.0, neginf=0.0)
@@ -84,6 +87,9 @@ def postprocess_logits(layer_logits: Any, normalize_probs: bool = False) -> Tupl
     return layer_preds, layer_probs
 
 def postprocess_logits_topk(layer_logits: Any, tokenizer:Any, normalize_probs: bool = False, top_n: int = 5) -> Tuple[Any, Any, Any]:
+    if layer_logits.dtype == np.float16:
+        layer_logits = layer_logits.astype(np.float32)
+
     layer_logits = np.nan_to_num(layer_logits, nan=-1e9, posinf=1e9, neginf=-1e9)
     layer_probs = scipy.special.softmax(layer_logits, axis=-1)
     layer_probs = np.nan_to_num(layer_probs, nan=1e-10, posinf=1.0, neginf=0.0)

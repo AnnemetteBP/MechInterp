@@ -86,11 +86,12 @@ def _plot_comparing_heatmap(
         text=text,
         hoverinfo="text",
         hovertext=hovertext,
-        colorscale='RdBu',
+        colorscale='blues',
         reversescale=True,
         showscale=True,
         texttemplate="%{text}",
-        textfont={"size": 11, "color": "black", "family": "Times New Roman"},
+        #textfont={"size": 11, "color": "black", "family": "Times New Roman"},
+        textfont={"size": 10, "family": "Times New Roman"},
         xgap=2, ygap=2
     ))
 

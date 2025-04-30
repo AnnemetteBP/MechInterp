@@ -71,11 +71,12 @@ def _plot_token_heatmap(
         text=text,
         hoverinfo="text",
         hovertext=hovertext,
-        colorscale='BuPu_r',  # Similar to seaborn 'coolwarm'  (try 'RdBu', 'RdBu_r', 'Plotly3')
+        colorscale='blues_r',  
         reversescale=True,
         showscale=True,
         texttemplate="%{text}",
-        textfont={"size": 10, "color": "black", "family": "Times New Roman"},
+        #textfont={"size": 10, "color": "black", "family": "Times New Roman"},
+        textfont={"size": 10, "family": "Times New Roman"},
         xgap=2, ygap=2
     ))
 

@@ -78,7 +78,7 @@ class BitLinear(IQuantLinear, nn.Module):
         packed_ternary = (ternary + 1).to(torch.uint8)
         print(f"[DEBUG] Packed: {packed_ternary} | ")
         actual_sparsity = (ternary == 0).float().mean().item()
-        print(f"[INFO] Quantized ternary sparsity: {actual_sparsity:.2%}") # theoretical 66.67% target and results 67.25% sparsity
+        print(f"[INFO] Quantized ternary sparsity: {actual_sparsity:.2%}") # theoretical 66.67% target
 
         # Smart alpha selection
         if self.smart_alpha:

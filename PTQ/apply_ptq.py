@@ -83,16 +83,6 @@ def applyPTQ(
     if layers_to_quant_activations is None:
         layers_to_quant_activations = default_layers
 
-    if fragile_layers:
-        # When applying PTQ, if layer in fragile_layers: disable act_quant!
-        fragile_layers = [name for name, metrics in collector.stats.items() if metrics['std'] < 1e-4]
-        print(f"[INFO] Fragile layers detected (std < 1e-4): {fragile_layers}")
-        print("[INFO] Deactivating act quant for fragile layers:")
-        for name in fragile_layers:
-            print(f"  - {name}")
-        for h in hooks:
-            h.remove()
-
     print(f"|| Quant Configs: {mode} | BitNet-style PTQ as: {'PTSQ' if act_quant else 'PTDQ'} ||")
 
     def get_quant_policy(name: str) -> Tuple[bool, bool, str, int]:
@@ -183,6 +173,19 @@ def applyPTQ(
                 hook.remove()
 
         calibrate_model(model, tokenizer)
+
+        if fragile_layers:
+            fragile_layers = [name for name, metrics in collector.stats.items() if metrics['std'] < 1e-5] # 1e-4
+            print(f"[INFO] Fragile layers detected (std < 1e-5): {fragile_layers}")
+            print("[INFO] Deactivating act quant for fragile layers:")
+            for name in fragile_layers:
+                print(f"  - {name}")
+                for n, m in model.named_modules():
+                    if isinstance(m, BitLinear) and name in n:
+                        m.act_quant = False
+            # Clean up the stats hooks
+            for h in hooks:
+                h.remove()
 
     # Re-enable ternary quantization before weight quantization
     for _, module in model.named_modules():
