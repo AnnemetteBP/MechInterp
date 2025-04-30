@@ -57,7 +57,7 @@ class BitLinear(IQuantLinear, nn.Module):
             self.act_scale_initialized = False
 
 
-    def quantize_ternary(self:BitLinear, tensor:torch.Tensor, sparsity_ratio:float=0.25, sample_ratio:float=0.01, deterministic:bool=True) -> Tuple[torch.Tensor, float, float]:
+    def quantize_ternary(self:BitLinear, tensor:torch.Tensor, sparsity_ratio:float=0.67, sample_ratio:float=0.01, deterministic:bool=True) -> Tuple[torch.Tensor, float, float]:
         """BitNet-style ternary quantization with optional smarter alpha."""
         abs_tensor = tensor.abs()
         total_elems = abs_tensor.numel()
@@ -77,6 +77,8 @@ class BitLinear(IQuantLinear, nn.Module):
         print(f"[DEBUG] Unpacked: {ternary} | ")
         packed_ternary = (ternary + 1).to(torch.uint8)
         print(f"[DEBUG] Packed: {packed_ternary} | ")
+        actual_sparsity = (ternary == 0).float().mean().item()
+        print(f"[INFO] Quantized ternary sparsity: {actual_sparsity:.2%}") # theoretical 66.67% target and results 67.25% sparsity
 
         # Smart alpha selection
         if self.smart_alpha:
@@ -113,18 +115,18 @@ class BitLinear(IQuantLinear, nn.Module):
         return torch.nan_to_num(out, nan=0.0, posinf=1e4, neginf=-1e4)
 
 
-    def quantize_activation(self: BitLinear, input: torch.Tensor, return_int: bool = False) -> torch.Tensor:
+    def quantize_activation(self:BitLinear, input:torch.Tensor, return_int:bool=False) -> torch.Tensor:
         if not hasattr(self, 'act_scale'):
             return input
 
         n_bits = self.act_bits
-        #qmin = -(2 ** (n_bits - 1) - 1)
-        #qmax = (2 ** (n_bits - 1)) - 1
-        qmin = -(2 ** (n_bits - 1))
-        qmax = (2 ** (n_bits - 1)) - 1
+        qmin = -127
+        qmax = 127
         scale = max(self.act_scale.item(), 1e-5)  # avoid div by near-zero
-
-        input_int = (input / scale).round().clamp(qmin, qmax).to(torch.int8)
+        #scale = max(self.act_scale.item(), 1e-4)
+        
+        #input_int = (input / scale).round().clamp(qmin, qmax).to(torch.int8)
+        input_int = (input / scale).round().clamp(-127, 127).to(torch.int8)
 
         if self.debug:
             print(f"[{self.name}] Act q range: {input_int.min().item()} to {input_int.max().item()}")
@@ -145,7 +147,7 @@ class BitLinear(IQuantLinear, nn.Module):
             return input_dequant
 
 
-    def calibrate_activation(self: BitLinear, input: torch.Tensor, act_bits: int = 8, force: bool = False, percentile: float = 0.9999):
+    def calibrate_activation(self:BitLinear, input:torch.Tensor, act_bits:int=8, force:bool=False, percentile:float=0.9999):
         if self.act_quant and (not self.act_scale_initialized or force):
             qmax = (2 ** (act_bits - 1)) - 1
             abs_input = input.clone().detach().abs().flatten()
@@ -163,8 +165,9 @@ class BitLinear(IQuantLinear, nn.Module):
             # Use mean instead of max for scaling factor
             mean_val = abs_input.mean()
 
-            # Avoid overly small scaling factors
-            scale = max(mean_val.item(), 1e-5) / qmax
+            # Avoiding overly small scaling factors
+            scale = max(max_val.item(), 1e-5) / qmax # more BitNet-style and outlier-safe
+            #scale = max(max_val.item(), 1e-4) / qmax 
             self.act_scale.copy_(torch.tensor(scale, device=self.act_scale.device))
             self.act_scale_initialized = True
 

@@ -1,14 +1,15 @@
 from __future__ import annotations
 from typing import Dict
-
+import os
 import torch
 import numpy as np
+import scipy.stats
 
 import matplotlib.pyplot as plt
 
 
 class QuantDebugger:
-    def __init__(self:QuantDebugger,
+    def __init__(self,
                  log_activations:bool=True,
                  log_weights:bool=True,
                  plot:bool=True) -> None:
@@ -28,7 +29,7 @@ class QuantDebugger:
 
         diff = (original - quantized).abs().mean().item()
         self.activation_diffs[name] = diff
-        
+
         if self.plot:
             self.plot_histograms(original, quantized, title=f"Activation: {name}")
 
@@ -46,9 +47,7 @@ class QuantDebugger:
             self.plot_histograms(original, quantized, title=f"Weight: {name}")
 
 
-    def plot_histograms(self:QuantDebugger, original:torch.Tensor, quantized:torch.Tensor, title:str="") -> None:
-        """ Plot histograms for visual comparison """
-
+    def plot_histograms(self:QuantDebugger, original, quantized, title="", save_path=None):
         original = original.detach().cpu().flatten().numpy()
         quantized = quantized.detach().cpu().flatten().numpy()
 
@@ -57,7 +56,18 @@ class QuantDebugger:
         plt.hist(quantized, bins=100, alpha=0.5, label="Quantized")
         plt.title(title)
         plt.legend()
-        plt.show()
+        
+        if save_path:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            plt.savefig(save_path)
+            print(f"[DEBUG] Saved histogram to {save_path}")
+        else:
+            try:
+                plt.show()
+            except Exception as e:
+                print(f"[WARNING] Plotting failed: {e}")
+        
+        plt.close()
 
 
     def summarize(self:QuantDebugger) -> None:

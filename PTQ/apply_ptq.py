@@ -53,6 +53,18 @@ def applyPTQ(
         freeze_modules:bool=True,
     ) -> Any:
 
+    
+    if calibration_input is None:
+        calibration_texts = [
+            "The quick brown fox jumps over the lazy dog.",
+            "Once upon a time, a knight rode into battle.",
+            "Artificial intelligence is reshaping the future.",
+            "Data science blends statistics and programming.",
+            "Quantum mechanics challenges our understanding of reality."
+        ]
+    else:
+        calibration_texts = calibration_input
+
     model.to(torch.float16) if model_half else model.to(torch.float32)
     dtype = torch.float16 if quant_half else torch.float32
 
@@ -75,6 +87,9 @@ def applyPTQ(
         # When applying PTQ, if layer in fragile_layers: disable act_quant!
         fragile_layers = [name for name, metrics in collector.stats.items() if metrics['std'] < 1e-4]
         print(f"[INFO] Fragile layers detected (std < 1e-4): {fragile_layers}")
+        print("[INFO] Deactivating act quant for fragile layers:")
+        for name in fragile_layers:
+            print(f"  - {name}")
         for h in hooks:
             h.remove()
 
@@ -112,27 +127,16 @@ def applyPTQ(
                     smart_alpha=smart_aplha,
                     plotting=plot_quantization
                 )
+                """if 'layers.0' in name or 'layers.1' in name:
+                    module.act_quant = False"""
                 if 'layers.0' in name or 'layers.1' in name:
-                    module.act_quant = False
+                    quantized.act_quant = False
                 if debugger is not None:
                     quantized.debugger = debugger
                 set_module_by_name(model, name, quantized)
                 bitlinear_layers.append((name, quantized))
             else:
                 raise NotImplementedError("[ERROR] Only '1.58bit' mode with BitLinear currently supported!")
-
-    default_calibration_texts = [
-            "The quick brown fox jumps over the lazy dog.",
-            "Once upon a time, a knight rode into battle.",
-            "Artificial intelligence is reshaping the future.",
-            "Data science blends statistics and programming.",
-            "Quantum mechanics challenges our understanding of reality."
-    ]
-    
-    if calibration_input is None:
-        calibration_texts = default_calibration_texts
-    else:
-        calibration_texts = calibration_input
 
     # Ensure calibration_texts is always a list
     if not isinstance(calibration_texts, list):

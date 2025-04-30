@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 
 
 class ActivationStatsCollector:
-    def __init__(self:ActivationStatsCollector) -> None:
+    def __init__(self) -> None:
         self.stats = {}
 
     """ Apply wrapper before quantixation """
@@ -20,7 +20,9 @@ class ActivationStatsCollector:
                 'max': act.max().item(),
                 'min': act.min().item(),
                 'std': act.std().item(),
-                'sparsity': (act == 0).float().mean().item()
+                'mean': act.mean().item(),
+                'sparsity': (act == 0).float().mean().item(),
+                'unique_vals': act.unique().numel()
             }
         
         return collect
@@ -44,6 +46,7 @@ class ActivationStatsCollector:
         
         for name, metrics in stats_list[:top_k]:
             print(f"{name} | max: {metrics['max']:.5e} | std: {metrics['std']:.5e} | sparsity: {metrics['sparsity']:.2%}")
+        
 
     def visualize(self:ActivationStatsCollector, layer_name:Any) -> None:
         if layer_name not in self.stats:
