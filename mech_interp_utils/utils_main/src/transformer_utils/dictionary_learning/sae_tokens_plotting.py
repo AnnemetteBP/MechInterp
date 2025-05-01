@@ -73,12 +73,17 @@ def _run_multi_layer_sae(
         multi_tokens:bool=False,
         do_log:bool=False,
         target_layers:List[int]=[5,10,15],
+        model_to_eval:bool=True,
+        deterministic_sae:bool=True,
         vis_projection:str|None=None,
         log_path:str|None=None,
         log_name:str|None=None,
         fig_path:str|None=None    
 ) -> Dict:
     """ Run multi-layer SAE analysis """
+
+    if deterministic_sae:
+        model.eval()
 
     all_layer_outputs = {}
 
@@ -87,7 +92,7 @@ def _run_multi_layer_sae(
         token_ids, hidden = get_layer_activations(model, tokenizer, text, target_layer_idx=layer_idx)
         tokens = tokenizer.convert_ids_to_tokens(token_ids)
 
-        sae = SAE(input_dim=hidden.shape[1], dict_size=512, sparsity_lambda=1e-3)
+        sae = SAE(input_dim=hidden.shape[1], dict_size=512, sparsity_lambda=1e-3, deterministic_sae=deterministic_sae)
         sae.train_sae(hidden, epochs=10, batch_size=4)
 
         codes = sae.encode(hidden).detach()
@@ -151,6 +156,8 @@ def plot_sae_tokens(
         multi_tokens:bool=False,
         do_log:bool=False,
         target_layers:List[int]=[5,10,15],
+        model_to_eval:bool=True,
+        deterministic_sae:bool=True,
         vis_projection:str|None=None, # 'pca' | 'tsne' | None
         log_path:str|None=None,
         log_name:str|None=None,
@@ -165,6 +172,8 @@ def plot_sae_tokens(
         multi_tokens=multi_tokens,
         do_log=do_log,
         target_layers=target_layers,
+        model_to_eval=model_to_eval,
+        deterministic_sae=deterministic_sae,
         vis_projection=vis_projection,
         log_path=log_path,
         log_name=log_name,

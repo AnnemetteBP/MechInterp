@@ -32,6 +32,10 @@ def text_to_input_ids(tokenizer:Any, text:str) -> torch.Tensor:
     return toks
 
 def set_deterministic(seed=42):
+    """ 
+    Forces PyTorch to use only deterministic operations (e.g., disables non-deterministic GPU kernels).
+    This is crucial for reproducibility: given the same inputs and model state, to get the same outputs every time.
+    """
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)

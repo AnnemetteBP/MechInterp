@@ -69,9 +69,14 @@ def _plot_comparing_heatmap(
             return blocks[idx] * max_len
 
         feature_lines = ""
-        for f_idx, f_val in zip(top_idx, top_vals):
+        #for f_idx, f_val in zip(top_idx, top_vals):
+            #norm_val = (f_val.item() - top_vals.min().item()) / (top_vals.max().item() - top_vals.min().item() + 1e-5)
+            #feature_lines += f"{bar(norm_val, max_len=5)} Feature {f_idx.item()}: {f_val.item():.3f}\n"
+        for rank, (f_idx, f_val) in enumerate(zip(top_idx, top_vals), 1):
             norm_val = (f_val.item() - top_vals.min().item()) / (top_vals.max().item() - top_vals.min().item() + 1e-5)
-            feature_lines += f"{bar(norm_val, max_len=5)} Feature {f_idx.item()}: {f_val.item():.3f}\n"
+            bg_color = f"rgba({255*(1-norm_val):.0f},{255*(norm_val):.0f},150,0.6)"
+            top_token = clean_token(tokens[f_idx.item()]) if f_idx.item() < len(tokens) else f"F{f_idx.item()}"
+            feature_lines += f"<span style='background-color:{bg_color};padding:2px;'>Top-{rank}: {top_token} ({f_val.item():.2f})</span><br>"
 
         hovertext[row][col] = (
             f"Token: {clean_tok}\n"
@@ -117,11 +122,20 @@ def _run_multi_model_sae(
         top_k:int=5,
         tokens_per_row:int=12,
         target_layers:List[int]=[5,10,15],
+        models_to_eval:bool=True,
+        deterministic_sae:bool=True,
         fig_path:str|None=None    
 ) -> Dict:
-    """ Run multi-layer SAE analysis """
+    """
+    Run multi-layer SAE analysis
+    eval() to disable dropout and uses running statistics for batch norm instead of batch-wise statistics.
+    This ensures the model behaves consistently during evaluation or inference (e.g., stable activations for SAE), not training.
+    """
 
     fp_model, quant_model = models
+    if models_to_eval:
+        fp_model.eval(), quant_model.eval()
+
     all_outputs = {}
 
     for layer_idx in target_layers:
@@ -131,14 +145,14 @@ def _run_multi_model_sae(
         fp_ids, fp_hidden = get_layer_activations(fp_model, tokenizer, text, target_layer_idx=layer_idx)
         tokens = tokenizer.convert_ids_to_tokens(fp_ids)
 
-        sae_fp = SAE(input_dim=fp_hidden.shape[1], dict_size=512, sparsity_lambda=1e-3)
+        sae_fp = SAE(input_dim=fp_hidden.shape[1], dict_size=512, sparsity_lambda=1e-3, deterministic_sae=deterministic_sae)
         sae_fp.train_sae(fp_hidden, epochs=10, batch_size=4)
         fp_codes = sae_fp.encode(fp_hidden).detach()
         fp_saliency = F.normalize(fp_codes, dim=1).abs().max(dim=1).values
 
         # Run Quant model
         _, quant_hidden = get_layer_activations(quant_model, tokenizer, text, target_layer_idx=layer_idx)
-        sae_q = SAE(input_dim=quant_hidden.shape[1], dict_size=512, sparsity_lambda=1e-3)
+        sae_q = SAE(input_dim=quant_hidden.shape[1], dict_size=512, sparsity_lambda=1e-3, deterministic_sae=deterministic_sae)
         sae_q.train_sae(quant_hidden, epochs=10, batch_size=4)
         quant_codes = sae_q.encode(quant_hidden).detach()
         quant_saliency = F.normalize(quant_codes, dim=1).abs().max(dim=1).values
@@ -180,6 +194,8 @@ def plot_comparing_heatmap(
         top_k:int=5,
         tokens_per_row:int=12,
         target_layers:List[int]=[5,10,15],
+        models_to_eval:bool=True,
+        deterministic_sae:bool=True,
         fig_path:str|None=None
 ) -> None:
     """ Plots colored tokens from SAE analysis """
@@ -191,5 +207,7 @@ def plot_comparing_heatmap(
         top_k=top_k,
         tokens_per_row=tokens_per_row,
         target_layers=target_layers,
+        models_to_eval=models_to_eval,
+        deterministic_sae=deterministic_sae,
         fig_path=fig_path
     )

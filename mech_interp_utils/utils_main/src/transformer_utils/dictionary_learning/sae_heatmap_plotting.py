@@ -57,12 +57,21 @@ def _plot_token_heatmap(
         z[row][col] = norm_saliency[idx] if saliency is not None else top_vals[0].item()
         text[row][col] = clean_tok
 
-        hover = f"Token: {clean_tok}\nTop-{top_k} Features:\n"
-        for f_idx, f_val in zip(top_idx, top_vals):
-            val = f_val.item()
-            norm_val = (val - top_vals.min().item()) / (top_vals.max().item() - top_vals.min().item() + 1e-5)
-            saliency_marker = "●" * int(norm_val * 5)  # Simulated saliency
-            hover += f"  {saliency_marker} Feature {f_idx.item()}: {val:.3f}\n"
+        #hover = f"Token: {clean_tok}\nTop-{top_k} Features:\n"
+        #for f_idx, f_val in zip(top_idx, top_vals):
+            #val = f_val.item()
+            #norm_val = (val - top_vals.min().item()) / (top_vals.max().item() - top_vals.min().item() + 1e-5)
+            #saliency_marker = "●" * int(norm_val * 5)  # Simulated saliency
+            #hover += f"  {saliency_marker} Feature {f_idx.item()}: {val:.3f}\n"
+        #hovertext[row][col] = hover
+
+        hover = f"<b>Token:</b> {clean_tok}<br><b>Saliency:</b> {norm_saliency[idx]:.3f}<br><br>"
+        hover += f"<b>Top-{top_k} Tokens:</b><br>"
+        for rank, (f_idx, f_val) in enumerate(zip(top_idx, top_vals), 1):
+            tok = clean_token(tokens[f_idx.item()]) if f_idx.item() < len(tokens) else f"F{f_idx.item()}"
+            norm_val = (f_val.item() - top_vals.min().item()) / (top_vals.max().item() - top_vals.min().item() + 1e-5)
+            bg_color = f"rgba({255*(1-norm_val):.0f},{255*norm_val:.0f},150,0.6)"
+            hover += f"<span style='background-color:{bg_color};padding:2px;'>Top-{rank}: {tok} ({f_val.item():.2f})</span><br>"
 
         hovertext[row][col] = hover
 
@@ -104,12 +113,17 @@ def _run_multi_layer_sae(
         top_k:int=5,
         tokens_per_row:int=12,
         target_layers:List[int]=[5,10,15],
+        model_to_eval:bool=True,
+        deterministic_sae:bool=True,
         log_path:str|None=None,
         log_name:str|None=None,
         fig_path:str|None=None    
 ) -> Dict:
     """ Run multi-layer SAE analysis """
 
+    if model_to_eval:
+        model.eval()
+    
     all_layer_outputs = {}
 
     for layer_idx in target_layers:
@@ -117,7 +131,7 @@ def _run_multi_layer_sae(
         token_ids, hidden = get_layer_activations(model, tokenizer, text, target_layer_idx=layer_idx)
         tokens = tokenizer.convert_ids_to_tokens(token_ids)
 
-        sae = SAE(input_dim=hidden.shape[1], dict_size=512, sparsity_lambda=1e-3)
+        sae = SAE(input_dim=hidden.shape[1], dict_size=512, sparsity_lambda=1e-3, deterministic_sae=deterministic_sae)
         sae.train_sae(hidden, epochs=10, batch_size=4)
 
         codes = sae.encode(hidden).detach()
@@ -168,11 +182,17 @@ def plot_sae_heatmap(
         top_k:int=5,
         tokens_per_row:int=12,
         target_layers:List[int]=[5,10,15],
+        model_to_eval:bool=True,
+        deterministic_sae:bool=True,
         log_path:str|None=None,
         log_name:str|None=None,
         fig_path:str|None=None
 ) -> None:
-    """ Plots colored tokens from SAE analysis """
+    """
+    Run multi-layer SAE analysis
+    eval() to disable dropout and uses running statistics for batch norm instead of batch-wise statistics.
+    This ensures the model behaves consistently during evaluation or inference (e.g., stable activations for SAE), not training.
+    """
 
     _run_multi_layer_sae(
         model=model,
@@ -182,6 +202,8 @@ def plot_sae_heatmap(
         top_k=top_k,
         tokens_per_row=tokens_per_row,
         target_layers=target_layers,
+        model_to_eval=model_to_eval,
+        deterministic_sae=deterministic_sae,
         log_path=log_path,
         log_name=log_name,
         fig_path=fig_path
