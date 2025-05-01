@@ -71,7 +71,7 @@ def _plot_token_heatmap(
         text=text,
         hoverinfo="text",
         hovertext=hovertext,
-        colorscale='blues_r',  
+        colorscale='reds_r',  
         reversescale=True,
         showscale=True,
         texttemplate="%{text}",

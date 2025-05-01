@@ -86,7 +86,7 @@ def _plot_comparing_heatmap(
         text=text,
         hoverinfo="text",
         hovertext=hovertext,
-        colorscale='blues',
+        colorscale='RdBu',
         reversescale=True,
         showscale=True,
         texttemplate="%{text}",

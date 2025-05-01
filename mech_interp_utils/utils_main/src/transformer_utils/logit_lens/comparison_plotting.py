@@ -252,7 +252,8 @@ def _plot_comparing_lens(
         vmin, vmax = 0, 1
         title = "Jensen–Shannon Divergence" if js else "Normalized Wasserstein Distance"
         plot_kwargs.update({
-            "cmap": "cet_linear_protanopic_deuteranopic_kbw_5_98_c40_r",
+            #"cmap": "cet_linear_protanopic_deuteranopic_kbw_5_98_c40_r",
+            "cmap": "Blues",
             "vmin": vmin,
             "vmax": vmax,
         })

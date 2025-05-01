@@ -18,12 +18,13 @@ class BitLinear(IQuantLinear, nn.Module):
     def __init__(self,
                 orig:nn.Linear,
                 dtype:torch.dtype,
-                name='unknown',
-                act_quant=False,
-                act_bits=8,
-                use_ternary=False,
-                smart_alpha=False,
-                debug=True,
+                name:str|Any='unknown',
+                act_quant:bool=False,
+                act_bits:int=8,
+                use_ternary:bool=False,
+                smart_alpha:bool=False,
+                deterministic:bool=True,
+                debug:bool=True,
                 plotting:bool=False) -> None:
         
         
@@ -37,27 +38,34 @@ class BitLinear(IQuantLinear, nn.Module):
         self.act_quant = act_quant
         self.act_bits = act_bits
         self.use_ternary = use_ternary
-        self.smart_alpha = smart_alpha 
+        self.smart_alpha = smart_alpha
+        self.deterministic = deterministic
         self.debug = debug
         self.debugger = None
-        self.plotting = plotting  
+        self.plotting = plotting
 
+        # Register buffers
         self.register_buffer('orig_weight', orig.weight.data.clone())
+        self.register_buffer('ternary_weight', torch.zeros_like(orig.weight))
+        self.register_buffer('alpha', torch.tensor(0.0))
+        self.register_buffer('tau', torch.tensor(0.0))
+
         if self.has_bias:
             self.bias = nn.Parameter(orig.bias.data.clone())
         else:
             self.bias = None
-
-        self.register_buffer('ternary_weight', None)
-        self.alpha = None
-        self.tau = None
 
         if act_quant:
             self.register_buffer('act_scale', torch.tensor(1.0))
             self.act_scale_initialized = False
 
 
-    def quantize_ternary(self:BitLinear, tensor:torch.Tensor, sparsity_ratio:float=0.67, sample_ratio:float=0.01, deterministic:bool=True) -> Tuple[torch.Tensor, float, float]:
+    def quantize_ternary(self:BitLinear,
+                         tensor:torch.Tensor,
+                         sparsity_ratio:float=0.67,
+                         sample_ratio:float=0.01,
+                         deterministic:bool=True) -> Tuple[torch.Tensor, float, float]:
+        
         """BitNet-style ternary quantization with optional smarter alpha."""
         abs_tensor = tensor.abs()
         total_elems = abs_tensor.numel()
@@ -72,15 +80,13 @@ class BitLinear(IQuantLinear, nn.Module):
             sample = flat[indices]
 
         tau = torch.quantile(sample, sparsity_ratio)
-
         ternary = torch.where(abs_tensor >= tau, torch.sign(tensor), torch.zeros_like(tensor))
-        print(f"[DEBUG] Unpacked: {ternary} | ")
+        #print(f"[DEBUG] Unpacked Ternary Tensor: {ternary} | ")
         packed_ternary = (ternary + 1).to(torch.uint8)
-        print(f"[DEBUG] Packed: {packed_ternary} | ")
+        #print(f"[DEBUG] Packed Ternary Tensor: {packed_ternary} | ")
         actual_sparsity = (ternary == 0).float().mean().item()
-        print(f"[INFO] Quantized ternary sparsity: {actual_sparsity:.2%}") # theoretical 66.67% target
+        print(f"[INFO] Quantized ternary sparsity: {actual_sparsity:.2%}")
 
-        # Smart alpha selection
         if self.smart_alpha:
             non_zero_mask = (abs_tensor >= tau)
             alpha = abs_tensor[non_zero_mask].mean() if non_zero_mask.sum() > 0 else abs_tensor.mean()
@@ -90,15 +96,17 @@ class BitLinear(IQuantLinear, nn.Module):
         return packed_ternary, tau.item(), alpha.item()
 
 
-    def quantize(self:BitLinear, weight:torch.Tensor, deterministic:bool=False):
-        """ Quantize weights to ternary and store them """
+    def quantize(self, weight:torch.Tensor, deterministic:bool=False):
+        """Quantize weights to ternary and store them."""
         if self.use_ternary:
-            q_w, tau, alpha = self.quantize_ternary(weight.float(), deterministic=deterministic)
-            self.ternary_weight = q_w
-            self.alpha = alpha
-            self.tau = tau
+            q_w, tau, alpha = self.quantize_ternary(weight.float(), deterministic=self.deterministic)
+
+            self.ternary_weight.data.copy_(q_w.to(self.ternary_weight.dtype))
+            self.alpha.data.copy_(torch.tensor(alpha, device=self.alpha.device))
+            self.tau.data.copy_(torch.tensor(tau, device=self.tau.device))
         else:
-            pass  # placeholder for other quantization types if needed...
+            # Other quantization modes could be added here.
+            pass
 
 
     def dequantize(self:BitLinear) -> torch.Tensor:
@@ -119,14 +127,14 @@ class BitLinear(IQuantLinear, nn.Module):
         if not hasattr(self, 'act_scale'):
             return input
 
-        n_bits = self.act_bits
+        #n_bits = self.act_bits
         qmin = -127
         qmax = 127
-        scale = max(self.act_scale.item(), 1e-5)  # avoid div by near-zero
+        scale = max(self.act_scale.item(), 1e-5)  # avoid div by near-zero  (or 1e-4)
         #scale = max(self.act_scale.item(), 1e-4)
         
-        #input_int = (input / scale).round().clamp(qmin, qmax).to(torch.int8)
-        input_int = (input / scale).round().clamp(-127, 127).to(torch.int8)
+        input_int = (input / scale).round().clamp(qmin, qmax).to(torch.int8)
+        #input_int = (input / scale).round().clamp(-127, 127).to(torch.int8)
 
         if self.debug:
             print(f"[{self.name}] Act q range: {input_int.min().item()} to {input_int.max().item()}")
@@ -174,6 +182,7 @@ class BitLinear(IQuantLinear, nn.Module):
             print(f"[DEBUG] {self.name} input stats -> min: {input.min().item():.5e}, max: {input.max().item():.5e}, std: {input.std().item():.5e}")
             print(f"[{self.name}] Calib input stats — mean: {input.mean():.4e}, std: {input.std().item():.4e}, min: {input.min().item():.4f}, max: {input.max().item():.4f}")
             print(f"[Calibration] {self.name} | Max Activation: {max_val.item():.5f} | Mean Activation: {mean_val.item():.5f} | Scale: {scale:.8f}")
+
 
     def freeze_quantization(self:BitLinear):
         self.debug = False
