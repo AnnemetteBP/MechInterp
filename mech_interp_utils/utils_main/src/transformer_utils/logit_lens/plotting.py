@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Tuple, List, Dict, Any
+from typing import Tuple, List, Dict, Any, Optional
 import torch
 import numpy as np
 
@@ -20,12 +20,23 @@ from .layer_names import make_layer_names
 
 
 # ===================== Probs and logits for topk = 1 ============================
-def text_to_input_ids(tokenizer:Any, text:str) -> torch.Tensor:
-    """ Encode inputs """
+"""def text_to_input_ids(tokenizer:Any, text:str) -> torch.Tensor:
 
     toks = tokenizer.encode(text, return_tensors="pt")
-    return torch.as_tensor(toks).view(1, -1).cpu()
+    return torch.as_tensor(toks).view(1, -1).cpu()"""
 
+def text_to_input_ids(tokenizer:Any, text:str, model:Optional[torch.nn.Module]=None) -> torch.Tensor:
+    """ Encode inputs and move them to the model's device """
+    toks = tokenizer.encode(text, return_tensors="pt")
+
+    if model is not None:
+        try:
+            device = next(model.parameters()).device
+        except StopIteration:
+            device = torch.device("cpu")
+        toks = toks.to(device)
+    
+    return toks
 
 def collect_logits(model, input_ids, layer_names, decoder_layer_names):
 
@@ -221,8 +232,8 @@ def _plot_logit_lens(
             }
         )
     elif entropy:
-        #vmin, vmax = None, None
-        vmin, vmax = 0, 10
+        vmin, vmax = None, None
+        #vmin, vmax = 0, 10
         title = "Entropy"
 
         plot_kwargs.update(
@@ -249,10 +260,10 @@ def _plot_logit_lens(
         plot_kwargs.update({"cmap": "Blues_r", "vmin": 0, "vmax": 1})
     else:
         title = "Logits"
-        #vmin = np.percentile(to_show.reshape(-1), 5)
-        #vmax = np.percentile(to_show.reshape(-1), 95)
-        vmin = 0
-        vmax = 1
+        vmin = np.percentile(to_show.reshape(-1), 5)
+        vmax = np.percentile(to_show.reshape(-1), 95)
+        #vmin = 0
+        #vmax = 1
 
         plot_kwargs.update(
             {
@@ -401,7 +412,7 @@ def plot_logit_lens(
                     decoder_layer_names=decoder_layer_names,
                     verbose=verbose)
 
-    input_ids = text_to_input_ids(tokenizer, input_ids)
+    input_ids = text_to_input_ids(tokenizer, input_ids, model)
 
     layer_logits, layer_names = collect_logits(
         model, input_ids, layer_names=layer_names, decoder_layer_names=decoder_layer_names,

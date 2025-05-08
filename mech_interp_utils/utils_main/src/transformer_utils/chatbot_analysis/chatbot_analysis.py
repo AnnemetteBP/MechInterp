@@ -7,9 +7,10 @@ from datetime import datetime
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import os, time
+import random
+import numpy as np
 import pandas as pd
-
 
 def _start_time() -> float:
     """ Start time """
@@ -22,6 +23,19 @@ def _end_time(start:float) -> float:
     latency = end - start
     return round(latency, 2)
 
+def set_deterministic_backend(seed:int=42) -> None:
+        """ 
+        Forces PyTorch to use only deterministic operations (e.g., disables non-deterministic GPU kernels).
+        This is crucial for reproducibility: given the same inputs and model state, to get the same outputs every time.
+        """
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+        torch.use_deterministic_algorithms(True)
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
 def _run_chatbot_analysis(
         model:Any,
         tokenizer:Any,
@@ -33,7 +47,9 @@ def _run_chatbot_analysis(
         repetition_penalty:float,
         sample:bool,
         device:str|None,
-        save_path:str
+        save_path:str,
+        deep_thinking:bool=False,
+        deterministic_backend:bool=True
 ) -> Dict:
     """Evaluate model across multiple dimensions: text generation, perplexity, hardware usage, and hidden state analysis"""
 
@@ -51,28 +67,77 @@ def _run_chatbot_analysis(
 
     model_device = next(model.parameters()).device
 
+    if deep_thinking:
     # --- TEXT GENERATION ---
-    messages = [
-        {"role": "system", "content": context},
-        {"role": "user", "content": prompt}
-    ]
-    input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, return_tensors='pt').to(model_device)
+        messages = [
+            {"role": "system", "content": context},
+            {"role": "user", "content": prompt}
+        ]
 
-    gen_start = _start_time()
-    with torch.no_grad():
-        generated_ids = model.generate(
-            input_ids,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            repetition_penalty=repetition_penalty,
-            do_sample=sample,
-            eos_token_id=tokenizer.eos_token_id
-        )
+        
+        input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, return_tensors='pt').to(model_device)
+        input_ids['attention_mask'] = (input_ids['input_ids'] != tokenizer.pad_token_id).long()
+        
+        chat_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
+        # set pad_token before this tokenizer call!
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+            model.config.pad_token_id = tokenizer.pad_token_id
+
+        input_dict = tokenizer(chat_text, return_tensors='pt', padding=True)
+        input_ids = input_dict['input_ids'].to(model_device)
+        attention_mask = input_dict['attention_mask'].to(model_device)
+    
+    else:
+        # Adjusted prompt for instruct models
+        chat_text = f"{context.strip()}\n{prompt.strip()}\nAnswer:"
+
+        # Make sure pad token is defined
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+            model.config.pad_token_id = tokenizer.pad_token_id
+
+        # Tokenize inputs
+        input_dict = tokenizer(chat_text, return_tensors='pt', padding=True)
+        input_ids = input_dict['input_ids'].to(model_device)
+        attention_mask = input_dict['attention_mask'].to(model_device)
+
+
+    if deterministic_backend:
+        set_deterministic_backend()
+
+    if deep_thinking:
+        gen_start = _start_time()
+        with torch.no_grad():
+            generated_ids = model.generate(
+                input_ids,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                repetition_penalty=repetition_penalty,
+                do_sample=sample,
+                eos_token_id=tokenizer.eos_token_id
+            )
+    else:
+        gen_start = _start_time()
+        with torch.no_grad():
+            generated_ids = model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                repetition_penalty=repetition_penalty,
+                do_sample=sample,
+                eos_token_id=tokenizer.eos_token_id
+            )
+
     latency = _end_time(gen_start)
 
     response = tokenizer.decode(generated_ids[0], skip_special_tokens=True, clean_up_tokenization_space=True)
     print(f"Generated Tokens: {generated_ids.shape[-1:]}\nResponse: {response}")
 
+    if deterministic_backend:
+        set_deterministic_backend()
     # --- PERPLEXITY ---
     with torch.no_grad():
         outputs = model(input_ids, labels=input_ids)
@@ -90,6 +155,9 @@ def _run_chatbot_analysis(
     gpu_memory = torch.cuda.memory_allocated() / (1024 ** 2) if torch.cuda.is_available() else 0
 
     # --- ACTIVATION SIMILARITY (formerly "Energy of Union") ---
+    if deterministic_backend:
+        set_deterministic_backend()
+    
     similarity = None
     try:
         model.config.output_hidden_states = True
@@ -157,21 +225,34 @@ def run_chatbot_analysis(
         repetition_penalty:float|None=None,
         sample:bool=True,
         device:str|None=None,
-        full_path:str|None=None
+        deep_thinking:bool=False,
+        full_path:str|None=None,
+        deterministic_backend:bool=True
 ) -> pd.DataFrame:
 
     """ Runs full analysis on all models w. SAME TOKENIZER and returns a DataFrame with results """
 
-    default_params = {
-        'context': "You are a deep thinking AI, you may use extremely long chains of thought to deeply consider the problem and deliberate with yourself via systematic reasoning processes to help come to a correct solution prior to answering. You should enclose your thoughts and internal monologue inside <think> </think> tags, and then provide your solution or response to the problem.",
-        #'prompt': "Who was the US president during the Apollo 11 moon landing?",
-        'prompt': "What is y if y=2*2-4+(3*2)",
-        'max_new_tokens': 50,
-        'temperature': 0.8,
-        'repetition_penalty': 1.0,
-        'sample': True,
-        'device': None
-    }
+    if deep_thinking:
+        default_params = {
+            'context': "You are a deep thinking AI, you may use extremely long chains of thought to deeply consider the problem and deliberate with yourself via systematic reasoning processes to help come to a correct solution prior to answering. You should enclose your thoughts and internal monologue inside <think> </think> tags, and then provide your solution or response to the problem.\n",
+            'prompt': "What is y if y=2*2-4+(3*2)\n",
+            'max_new_tokens': 250,
+            'temperature': 0.8,
+            'repetition_penalty': 1.0,
+            'sample': False,
+            'device': None
+        }
+    else:
+        default_params = {
+            'context': "You are a helpful assistant. Answer the question clearly and concisely.\n",
+            #'prompt': "Who was the US president during the Apollo 11 moon landing?",
+            'prompt': "Daniel went back to the the the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\n",
+            'max_new_tokens': 10,
+            'temperature': 0.8,
+            'repetition_penalty': 1.0,
+            'sample': False,
+            'device': None
+        }
 
     params = {
         'context': context if context else default_params.get('context'),
@@ -196,9 +277,46 @@ def run_chatbot_analysis(
             repetition_penalty=params.get('repetition_penalty'),
             sample=params.get('sample'),
             device=params.get('device'),
-            save_path=full_path
+            save_path=full_path,
+            deterministic_backend=deterministic_backend
         )
 
         results.append(result)
 
     return pd.DataFrame(results)
+
+
+
+"""
+prompts = [
+    "Daniel went back to the garden. Mary travelled to the kitchen. Where is Mary?",
+    "John picked up the apple. John went to the hallway. Where is the apple?",
+    "Sandra journeyed to the office. Sandra dropped the book. Where is the book?"
+]
+
+context = "You are a helpful assistant. Answer the question clearly and concisely."
+
+results = []
+for i, prompt in enumerate(prompts):
+    chat_text = f"{context.strip()}\n{prompt.strip()}\nAnswer:"
+
+    input_dict = tokenizer(chat_text, return_tensors='pt', padding=True)
+    input_ids = input_dict['input_ids'].to(model_device)
+    attention_mask = input_dict['attention_mask'].to(model_device)
+
+    with torch.no_grad():
+        output_ids = model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=20,
+            do_sample=False,
+            temperature=0.7
+        )
+
+    output_text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+    print(f"Prompt {i+1}: {prompt}\nResponse: {output_text}\n")
+    results.append(output_text)
+
+
+
+"""

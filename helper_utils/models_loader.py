@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Tuple
+from typing import Tuple, Optional
 
 import os
 import torch
@@ -89,7 +89,17 @@ def load_fp_auto(KEY:str, hs:bool, r_dict:bool, precision:torch.dtype, mem:bool,
         return model
 
 
-def load_8bit_auto(KEY:str, hs:bool, r_dict:bool, precision:torch.dtype, bnb_precision:torch.dtype, dmap:str, sf:bool, trust_remote:bool) -> AutoModelForCausalLM:
+def load_8bit_auto(
+        KEY:str,
+        hs:bool=True,
+        r_dict:bool=True,
+        precision:Optional[torch.dtype|None]=torch.float32,
+        bnb_precision:torch.dtype=torch.float16,
+        dmap:str='auto',
+        sf:bool=True,
+        trust_remote:bool=False
+    ) -> AutoModelForCausalLM:
+
     """ Load auto model in 8-bit precision
         KEY: model transformer endpoint
         hs: hidden states = True - important for snapper snalysis
@@ -97,8 +107,8 @@ def load_8bit_auto(KEY:str, hs:bool, r_dict:bool, precision:torch.dtype, bnb_pre
 
     bnb_config = BitsAndBytesConfig(
         load_in_8bit=True,  # Native 8-bit quantization
-        llm_int8_enable_fp32_cpu_offload=True,
-        llm_int8_has_fp16_weight=False,
+        llm_int8_enable_fp32_cpu_offload=False,
+        llm_int8_has_fp16_weight=True,
         bnb_8bit_compute_dtype=bnb_precision,  # Ensure compute dtype is float16
         bnb_8bit_use_double_quant=True
     )
@@ -107,17 +117,26 @@ def load_8bit_auto(KEY:str, hs:bool, r_dict:bool, precision:torch.dtype, bnb_pre
         KEY,
         return_dict=r_dict,
         output_hidden_states=hs,
-        torch_dtype=precision,
+        #torch_dtype=precision,
         quantization_config=bnb_config,
         device_map=dmap,
         use_safetensors=sf,
-        #trust_remote_code=trust_remote 
+        trust_remote_code=trust_remote 
     )
     
     return model
 
 
-def load_4bit_auto(KEY:str, hs:bool, r_dict:bool, precision:torch.dtype, dmap:str, sf:bool, trust_remote:bool) -> AutoModelForCausalLM:
+def load_4bit_auto(
+        KEY:str,
+        hs:bool=True,
+        r_dict:bool=True,
+        precision:torch.dtype=torch.float16,
+        dmap:str='auto',
+        sf:bool=True,
+        trust_remote:bool=False
+    ) -> AutoModelForCausalLM:
+
     """ Load auto model in 4-bit precision
         KEY: model transformer endpoint
         hs: hidden states = True - important for snapper snalysis
@@ -138,7 +157,7 @@ def load_4bit_auto(KEY:str, hs:bool, r_dict:bool, precision:torch.dtype, dmap:st
         quantization_config=bnb_config,
         device_map=dmap,
         use_safetensors=sf,
-        #trust_remote_code=trust_remote 
+        trust_remote_code=trust_remote 
     )
     
     return model

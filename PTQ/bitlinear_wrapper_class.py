@@ -7,14 +7,12 @@ import torch.nn.functional as F
 
 import matplotlib.pyplot as plt
 
-from .quant_linear_interface import IQuantLinear
-
 import warnings
 warnings.filterwarnings('ignore')
 
 
 # ===================== Ternary quant wrapper ============================ 
-class BitLinear(IQuantLinear, nn.Module):
+class BitLinear(nn.Module):
     def __init__(self,
                 orig:nn.Linear,
                 dtype:torch.dtype,
@@ -29,8 +27,8 @@ class BitLinear(IQuantLinear, nn.Module):
         
         
         super().__init__()
-        IQuantLinear.__init__(self, name=name)
         
+        self.name = name or "UnnamedBitLinear"
         self.in_features = orig.in_features
         self.out_features = orig.out_features
         self.has_bias = orig.bias is not None
@@ -81,9 +79,9 @@ class BitLinear(IQuantLinear, nn.Module):
 
         tau = torch.quantile(sample, sparsity_ratio)
         ternary = torch.where(abs_tensor >= tau, torch.sign(tensor), torch.zeros_like(tensor))
-        #print(f"[DEBUG] Unpacked Ternary Tensor: {ternary} | ")
+        print(f"[DEBUG] Unpacked Ternary Tensor: {ternary} | ")
         packed_ternary = (ternary + 1).to(torch.uint8)
-        #print(f"[DEBUG] Packed Ternary Tensor: {packed_ternary} | ")
+        print(f"[DEBUG] Packed Ternary Tensor: {packed_ternary} | ")
         actual_sparsity = (ternary == 0).float().mean().item()
         print(f"[INFO] Quantized ternary sparsity: {actual_sparsity:.2%}")
 
@@ -96,7 +94,7 @@ class BitLinear(IQuantLinear, nn.Module):
         return packed_ternary, tau.item(), alpha.item()
 
 
-    def quantize(self, weight:torch.Tensor, deterministic:bool=False):
+    def quantize(self:BitLinear, weight:torch.Tensor, deterministic:bool=True):
         """Quantize weights to ternary and store them."""
         if self.use_ternary:
             q_w, tau, alpha = self.quantize_ternary(weight.float(), deterministic=self.deterministic)
@@ -117,7 +115,7 @@ class BitLinear(IQuantLinear, nn.Module):
         return unpacked_ternary * self.alpha
 
     
-    def dequantize_activation(self: BitLinear, act_int8: torch.Tensor) -> torch.Tensor:
+    def dequantize_activation(self:BitLinear, act_int8:torch.Tensor) -> torch.Tensor:
         scale = self.act_scale.item()
         out = act_int8.float() * scale
         return torch.nan_to_num(out, nan=0.0, posinf=1e4, neginf=-1e4)
@@ -130,8 +128,9 @@ class BitLinear(IQuantLinear, nn.Module):
         #n_bits = self.act_bits
         qmin = -127
         qmax = 127
-        scale = max(self.act_scale.item(), 1e-5)  # avoid div by near-zero  (or 1e-4)
+        #scale = max(self.act_scale.item(), 1e-5)  # avoid div by near-zero  (or 1e-4)
         #scale = max(self.act_scale.item(), 1e-4)
+        scale = max(self.act_scale.item(), 1e-2)
         
         input_int = (input / scale).round().clamp(qmin, qmax).to(torch.int8)
         #input_int = (input / scale).round().clamp(-127, 127).to(torch.int8)
@@ -174,8 +173,9 @@ class BitLinear(IQuantLinear, nn.Module):
             mean_val = abs_input.mean()
 
             # Avoiding overly small scaling factors
-            scale = max(max_val.item(), 1e-5) / qmax # more BitNet-style and outlier-safe
-            #scale = max(max_val.item(), 1e-4) / qmax 
+            #scale = max(max_val.item(), 1e-5) / qmax # more BitNet-style and outlier-safe
+            #scale = max(max_val.item(), 1e-4) / qmax
+            scale = max(max_val.item(), 1e-2) / qmax  
             self.act_scale.copy_(torch.tensor(scale, device=self.act_scale.device))
             self.act_scale_initialized = True
 

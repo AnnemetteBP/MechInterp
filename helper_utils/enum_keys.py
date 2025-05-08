@@ -24,6 +24,7 @@ class ModelKey(Enum):
     OLMO_1B = 'allenai/OLMo-1B-hf'
     OLMO_7B = 'allenai/OLMo-7B-hf'
     OLMO_7B_2T = 'allenai/OLMo-7B-Twin-2T-hf'
+    B158_KEY = 'microsoft/bitnet-b1.58-2B-4T'
 
 
 class FPKey(Enum):
@@ -152,6 +153,7 @@ class MiscPrompts(Enum):
     Q9:str = "I can tell you as a result of my research about the atoms this much: There is no matter as such!"
     Q10:str = "Je peux vous dire, suite à mes recherches sur les atomes, ceci: il n'existe pas de matière en tant que telle!"
     Q11:str = "Intelligence cannot be present without understanding. No computer has any awareness of what it does."
+    Q12:str = "Daniel went back to the the the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:"
 
 
 class Contexts(Enum):

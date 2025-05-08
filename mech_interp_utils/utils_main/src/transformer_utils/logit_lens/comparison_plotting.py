@@ -23,11 +23,23 @@ from .layer_names import make_layer_names
 
 
 # ===================== Probs and logits for topk = 1 ============================
-def text_to_input_ids(tokenizer:Any, text:str) -> torch.Tensor:
-    """ Encode inputs """
+"""def text_to_input_ids(tokenizer:Any, text:str) -> torch.Tensor:
 
     toks = tokenizer.encode(text, return_tensors="pt")
-    return torch.as_tensor(toks).view(1, -1).cpu()
+    return torch.as_tensor(toks).view(1, -1).cpu()"""
+
+def text_to_input_ids(tokenizer:Any, text:str, model:Optional[torch.nn.Module]=None) -> torch.Tensor:
+    """ Encode inputs and move them to the model's device """
+    toks = tokenizer.encode(text, return_tensors="pt")
+
+    if model is not None:
+        try:
+            device = next(model.parameters()).device
+        except StopIteration:
+            device = torch.device("cpu")
+        toks = toks.to(device)
+    
+    return toks
 
 
 def collect_logits(model, input_ids, layer_names, decoder_layer_names):
@@ -406,15 +418,17 @@ def plot_comparing_lens(
         decoder_layer_names=decoder_layer_names,
         verbose=verbose
     )
-                
-    input_ids = text_to_input_ids(tokenizer, input_ids)
 
+    input_ids = text_to_input_ids(tokenizer, input_ids, model_2)
+    input_ids_1 = input_ids.to(next(model_1.parameters()).device)
+    input_ids_2 = input_ids
+    
     layer_logits_1, layer_names_1 = collect_logits(
-        model_1, input_ids, layer_names=layer_names_1, decoder_layer_names=decoder_layer_names,
+        model_1, input_ids_1, layer_names=layer_names_1, decoder_layer_names=decoder_layer_names,
     )
-                
+
     layer_logits_2, layer_names_2 = collect_logits(
-        model_2, input_ids, layer_names=layer_names_2, decoder_layer_names=decoder_layer_names,
+        model_2, input_ids_2, layer_names=layer_names_2, decoder_layer_names=decoder_layer_names,
     )
         
     layer_preds_1, layer_probs_1 = postprocess_logits(layer_logits_1)

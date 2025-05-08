@@ -5,8 +5,23 @@ import os, time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import random
+import torch
+import torch.nn as nn
+import numpy as np
 
 
+def set_deterministic_backend(seed:int=42) -> None:
+        """ 
+        Forces PyTorch to use only deterministic operations (e.g., disables non-deterministic GPU kernels).
+        This is crucial for reproducibility: given the same inputs and model state, to get the same outputs every time.
+        """
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+        torch.use_deterministic_algorithms(True)
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
 
 def make_dir(directory:str) -> str:
     """ Make directory for e.g., stroing models and versions """

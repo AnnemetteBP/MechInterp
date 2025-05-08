@@ -18,10 +18,22 @@ from .activation_lens_hooks import make_lens_hooks
 from ..logit_lens.layer_names import make_layer_names
 
 
-def text_to_input_ids(tokenizer: Any, text: str) -> torch.Tensor:
-    """ Encode inputs """
+"""def text_to_input_ids(tokenizer: Any, text: str) -> torch.Tensor:
     toks = tokenizer.encode(text, return_tensors="pt")
-    return torch.as_tensor(toks).view(1, -1).cpu()
+    return torch.as_tensor(toks).view(1, -1).cpu()"""
+
+def text_to_input_ids(tokenizer:Any, text:str, model:Optional[torch.nn.Module]=None) -> torch.Tensor:
+    """ Encode inputs and move them to the model's device """
+    toks = tokenizer.encode(text, return_tensors="pt")
+
+    if model is not None:
+        try:
+            device = next(model.parameters()).device
+        except StopIteration:
+            device = torch.device("cpu")
+        toks = toks.to(device)
+    
+    return toks
 
 # ========== Collect Logits and Post-process ========== 
 def collect_logits(model, tokenizer, input_ids, layer_names, decoder_layer_names=None):
@@ -376,7 +388,7 @@ def plot_comparing_act_lens(
     )
 
     if isinstance(input_ids, str):
-        input_ids = text_to_input_ids(tokenizer, input_ids)
+        input_ids = text_to_input_ids(tokenizer, input_ids, comparison_model)
     
     activations_true, _ = collect_activations(base_model, input_ids, layer_names_base)
     activations_compare, _ = collect_activations(comparison_model, input_ids, layer_names_comparison)

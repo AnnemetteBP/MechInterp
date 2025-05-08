@@ -1,12 +1,15 @@
 from __future__ import annotations
-from typing import Tuple, List, Dict, Optional, Any,  Literal
+from typing import Tuple, List, Dict, Optional, Any,  Literal, Callable
+import os
 import random, numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from transformers import AutoTokenizer, AutoConfig, AutoModelForCausalLM, LlamaForCausalLM
+from transformers.modeling_utils import PreTrainedModel
+from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 
 from .ptq_utils import set_module_by_name
-
 from .bitlinear_wrapper_class import BitLinear
 from .quant_debugger import QuantDebugger
 from .activation_stats_collector import ActivationStatsCollector
@@ -15,21 +18,58 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
-# === Dry Forward for Static Quant Calibration (PTSQ only) ===
-@torch.no_grad()
-def dry_forward(model:nn.Module, dummy_input:torch.Tensor):
+# Load a model with pretrained weights and quantized parameters
+def load_quantized_model(model_path, model_class=LlamaForCausalLM, tokenizer_class=AutoTokenizer):
+    model = model_class.from_pretrained(model_path)
+    state_dict = torch.load(model_path, map_location="cpu")
+
+    # Load quantized weights and parameters
+    for name, module in model.named_modules():
+        if isinstance(module, BitLinear):
+            # Load ternary weight, alpha, tau and activation scale for each BitLinear layer
+            bitlinear = BitLinear.from_linear(module.linear_layer, act_quant=True, use_ternary=True)
+            bitlinear.ternary_weight = state_dict.get(f"{name}.ternary_weight")
+            bitlinear.alpha = state_dict.get(f"{name}.alpha")
+            bitlinear.tau = state_dict.get(f"{name}.tau")
+            bitlinear.act_scale = state_dict.get(f"{name}.act_scale")
+            model._modules[name] = bitlinear
+
+    model.load_state_dict(state_dict, strict=False)
     model.eval()
-    _ = model(dummy_input)
-    print("[PTSQ] Since quantizing activations, dry forward done for calibration!")
+    return model
+
 
 def get_dummy_input(model, seq_len=128):
     hidden = model.config.hidden_size
     return torch.randn(1, seq_len, hidden).to(next(model.parameters()).device)
 
-def text_to_input_ids(tokenizer:Any, text:str) -> torch.Tensor:
-    """ Encode inputs properly for embedding """
-    toks = tokenizer.encode(text, max_length=256, truncation=True, padding="max_length", return_tensors="pt")  # LongTensor
-    return toks
+def text_to_input_ids(tokenizer: Any, text: str) -> Dict[str, torch.Tensor]:
+    """Encode input text into token IDs and attention mask for model input."""
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    return tokenizer(
+        text,
+        max_length=128,
+        truncation=True,
+        padding="max_length",
+        return_tensors="pt"
+    )
+
+def save_quantized_model_with_bitlinear(model: nn.Module, save_path: str):
+    # Save the model state dict (including quantized parameters and buffers)
+    model_state = model.state_dict()
+    for name, module in model.named_modules():
+        if isinstance(module, BitLinear):
+            # Ensure we save the ternary weights and other quantization buffers
+            model_state[f'{name}.ternary_weight'] = module.ternary_weight
+            model_state[f'{name}.alpha'] = module.alpha
+            model_state[f'{name}.tau'] = module.tau
+            if module.act_quant:
+                model_state[f'{name}.act_scale'] = module.act_scale
+
+    torch.save(model_state, save_path)
+    print(f"Quantized model saved to {save_path}")
+
 
 def set_deterministic(seed=42):
     """ 
@@ -41,32 +81,27 @@ def set_deterministic(seed=42):
     random.seed(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    #torch.backends.cuda.matmul.allow_tf32 = False
+    #torch.backends.cudnn.allow_tf32 = False
     torch.use_deterministic_algorithms(True)
-    torch.set_float32_matmul_precision("high")
+    #torch.set_float32_matmul_precision("high")
 
-def save_quantized(model:Any, save_path:str) -> None:
-    torch.save(model.state_dict(), f"{save_path}.pt")
-    print(f"[INFO] Model saved to: {save_path}!")
+def strip_unused_quant_buffers(model):
+    for module in model.modules():
+        if isinstance(module, BitLinear):
+            # Optionally keep orig_weight if you want to support dequantization later
+            if hasattr(module, "orig_weight"):
+                delattr(module, "orig_weight")
+            if hasattr(module, "last_quantized_act"):
+                delattr(module, "last_quantized_act")
 
-def load_quantized(model:Any, model_path:str, model_to_eval:bool=False) -> Any:
-    saved_model = model.load_state_dict(torch.load(f"{model_path}.pt"))
-    model.eval() if model_to_eval else f"[INFO] Model not set to eval mode!"
-    return saved_model
-
-def force_eval_mode(model:Any) -> None:
-    model.eval()
-    for m in model.modules():
-        if hasattr(m, 'eval'):
-            m.eval()
-    print("[INFO] Model set to eval mode!")
-
-# ===================== Main Quantization Logic ============================
 def applyPTQ(
         model:Any,
         tokenizer:Any,
         calibration_input:Optional[str|None],
         mode:str='1.58bit',
         safer_quant:bool=True,
+        q_lmhead:bool=True,
         model_half:bool=False,
         quant_half:bool=False,
         layers_to_quant_weights:Optional[List[str]]|None=None,
@@ -83,46 +118,7 @@ def applyPTQ(
         freeze_modules:bool=True,
         save_model_path:str|None=None
     ) -> Any:
-    """
-    Apply post-training quantization (PTQ) to a transformer-style model using BitNet-style ternary weight quantization (1.58-bit)
-    and optional activation quantization. Supports fragile layer detection, layerwise policy control, and calibration over a text corpus.
-    Model can be e.g., olmo, llama.
 
-    Args:
-        model (Any): A PyTorch model with `nn.Linear` modules to be replaced by BitLinear.
-        tokenizer (Any): A tokenizer for converting text into model input.
-        calibration_input (str | List[str] | None): Text(s) for calibration.
-        mode (str): Quantization mode. Only '1.58bit' is supported.
-        safer_quant (bool): Skip quantization on sensitive modules (e.g. LayerNorm).
-        model_half (bool): Cast model to FP16 before quantization.
-        quant_half (bool): Quantize weights/activations in FP16 instead of FP32.
-        layers_to_quant_weights (List[str]): Layer substrings for weight quantization.
-        layers_to_quant_activations (List[str]): Layer substrings for activation quantization.
-        fragile_layers (bool): Disable activation quantization on low-variance layers.
-        act_quant (bool): Enable activation quantization.
-        act_bits (int): Bits for symmetric activation quantization (default: 8).
-        smart_aplha (bool): Use adaptive alpha scaling for ternary weights.
-        deterministic (bool): Use deterministic ternary quantization.
-        debugging (bool): Enable hooks to log quantization process.
-        plot_debugging (bool): plot debugger.
-        plot_quantization (bool): plot activation quantization from BitLinear.
-        freeze_modules (bool): Freeze quantized modules (no further training).
-
-    Returns:
-        model (Any): Quantized model with `BitLinear` modules replacing eligible `nn.Linear`.
-
-    Quantization Validity (Formalism):
-        Let Q_w(m) := "weights of module m are quantized to ternary {−α, 0, +α}"  
-        Let Q_a(m) := "activations of module m are quantized to N-bit fixed-point"  
-        Let BL(m) := "m is instance of BitLinear"
-
-        For all m in model.modules:
-            BL(m) => (Q_w(m) ∨ Q_a(m)) ∧ (Q_w(m) ↔ m.orig_weight != None and is_discrete(m.weight))
-
-        Where:
-            is_discrete(w) := ∀x ∈ w, x ∈ {−α, 0, +α}
-    """
-    
     if calibration_input is None:
         calibration_texts = [
             "The quick brown fox jumps over the lazy dog.",
@@ -139,7 +135,7 @@ def applyPTQ(
     
     if model_half:
         torch.backends.cuda.matmul.allow_tf32 = False
-
+        
     if mode != '1.58bit':
         raise NotImplementedError("[ERROR] Only '1.58bit' mode currently supported!")
 
@@ -161,14 +157,13 @@ def applyPTQ(
         quantize_weights = any(layer in name for layer in layers_to_quant_weights)
         quantize_activations = any(layer in name for layer in layers_to_quant_activations) if act_quant else False
         this_mode = mode
-
+        q_layers = ['embed_tokens', 'lm_head', 'norm', 'layernorm'] if q_lmhead else ['embed_tokens', 'norm', 'layernorm']
         if safer_quant:
-            if any(skip in name for skip in ['embed_tokens', 'lm_head', 'norm', 'layernorm']):
+            if any(skip in name for skip in q_layers): # no impact 'lm_head' for 7B+: https://medium.com/@NeuralCompressor/10-tips-for-quantizing-llms-and-vlms-with-autoround-923e733879a7#:~:text=However%2C%20quantizing%20the%20LM%2Dhead,provides%20a%20reasonable%20compression%20rate.
                 quantize_weights = False
                 quantize_activations = False
 
         return quantize_weights, quantize_activations, this_mode
-
         
     bitlinear_layers = []
     print(">> [STEP 1] Wrapping Linear layers (no weight quant yet)...")
@@ -191,9 +186,7 @@ def applyPTQ(
                     plotting=plot_quantization
                 )
                 """if 'layers.0' in name or 'layers.1' in name:
-                    module.act_quant = False"""
-                if 'layers.0' in name or 'layers.1' in name:
-                    quantized.act_quant = False
+                    quantized.act_quant = False"""
                 if debugger is not None:
                     quantized.debugger = debugger
                 set_module_by_name(model, name, quantized)
@@ -201,19 +194,18 @@ def applyPTQ(
             else:
                 raise NotImplementedError("[ERROR] Only '1.58bit' mode with BitLinear currently supported!")
 
-    # Ensure calibration_texts is always a list
     if not isinstance(calibration_texts, list):
         calibration_texts = [calibration_texts]
     # Disable ternary mode globally before activation calibration
     for _, module in model.named_modules():
         if isinstance(module, BitLinear):
             module.use_ternary = False
+    
+    if torch_backends:
+        set_deterministic()
 
     if act_quant:
         print(">> [STEP 2] Run calibration pass with full-precision weights to collect correct activation stats...")
-
-        if torch_backends:
-            set_deterministic()
         
         @torch.no_grad()
         def calibrate_model(model, tokenizer):
@@ -237,10 +229,15 @@ def applyPTQ(
             for text in calibration_texts:
                 if not text.strip():
                     continue
-                dummy_input = text_to_input_ids(tokenizer=tokenizer, text=text).to(next(model.parameters()).device)
+                """dummy_input = text_to_input_ids(tokenizer=tokenizer, text=text).to(next(model.parameters()).device)
                 if dummy_input.numel() == 0:
                     continue
-                _ = model(dummy_input)  # Run forward pass
+                _ = model(dummy_input)  # Run forward pass"""
+                input_dict = text_to_input_ids(tokenizer=tokenizer, text=text)
+                input_dict = {k: v.to(next(model.parameters()).device) for k, v in input_dict.items()}
+                if input_dict["input_ids"].numel() == 0:
+                    continue
+                _ = model(**input_dict)
 
             # Remove hooks after calibration
             for hook in hooks:
@@ -294,7 +291,9 @@ def applyPTQ(
             print(f"{name:50s} | act_scale: {module.act_scale.item():.6f}")
 
     if save_model_path:
-        save_quantized(model=model, save_path=save_model_path)
+        strip_unused_quant_buffers(model)
+        model.save_pretrained(save_model_path, safe_serialization=True)
+        #save_quantized_model_with_bitlinear(model=model, save_path=save_model_path)
 
     model.eval()
     for m in model.modules():
@@ -303,3 +302,4 @@ def applyPTQ(
                 p.requires_grad = False
     
     return model
+
