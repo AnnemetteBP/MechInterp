@@ -109,6 +109,7 @@ def _run_multi_layer_sae(
         model:Any,
         tokenizer:Any,
         text:str,
+        plot_sae:bool=False,
         do_log:bool=False,
         top_k:int=5,
         tokens_per_row:int=12,
@@ -153,31 +154,47 @@ def _run_multi_layer_sae(
         topk_indices = total_per_feature.topk(top_k).indices
         feature_token_matrix = codes[:, topk_indices].abs().T  # shape: [top_k x num_tokens]
 
-        _plot_token_heatmap(
-            tokens=tokens,
-            feature_token_matrix=feature_token_matrix,
-            top_k=top_k,
-            saliency=saliency,
-            tokens_per_row=tokens_per_row
-        )
+        if plot_sae:
+            _plot_token_heatmap(
+                tokens=tokens,
+                feature_token_matrix=feature_token_matrix,
+                top_k=top_k,
+                saliency=saliency,
+                tokens_per_row=tokens_per_row
+            )
 
         if do_log:
-            # Save each layer separately
-            os.makedirs(log_path, exist_ok=True)
-            torch.save(hidden, f"{log_path}/{log_name}_ha_ml.pt")
-            torch.save(codes, f"{log_path}/{log_name}_cc_ml.pt")
-            torch.save(sae.decoder.weight.detach(), f"{log_path}/{log_name}_sae_dict_ml.pt")
-            
-            with open(f"{log_path}/{log_name}_tokens_ml.json", 'w') as f:
-                json.dump(tokens, f)
+            try:
+                os.makedirs(log_path, exist_ok=True)
+                safe_log_name = log_name.replace(':', '_').replace('/', '_').replace(' ', '_') if log_name else "log"
 
-    return all_layer_outputs
+                # Convert tensors to lists for JSON serialization
+                hidden_list = hidden.detach().cpu().tolist()
+                codes_list = codes.detach().cpu().tolist()
+                sae_dict_list = sae.decoder.weight.detach().cpu().tolist()
+
+                # Save each as JSON
+                with open(os.path.join(log_path, f"{safe_log_name}_ha_ml_L{layer_idx}.json"), 'w', encoding='utf-8') as f:
+                    json.dump(hidden_list, f, ensure_ascii=False, indent=2)
+
+                with open(os.path.join(log_path, f"{safe_log_name}_cc_ml_L{layer_idx}.json"), 'w', encoding='utf-8') as f:
+                    json.dump(codes_list, f, ensure_ascii=False, indent=2)
+
+                with open(os.path.join(log_path, f"{safe_log_name}_sae_dict_ml_L{layer_idx}.json"), 'w', encoding='utf-8') as f:
+                    json.dump(sae_dict_list, f, ensure_ascii=False, indent=2)
+
+                with open(os.path.join(log_path, f"{safe_log_name}_tokens_ml_L{layer_idx}.json"), 'w', encoding='utf-8') as f:
+                    json.dump(tokens, f, ensure_ascii=False, indent=2)
+
+            except Exception as e:
+                print(f"[ERROR] Logging failed at layer {layer_idx}: {e}")
 
 
 def plot_sae_heatmap(
         model:Any,
         tokenizer:Any,
         inputs:Any,
+        plot_sae:bool=False,
         do_log:bool=False,
         top_k:int=5,
         tokens_per_row:int=12,
@@ -198,6 +215,7 @@ def plot_sae_heatmap(
         model=model,
         tokenizer=tokenizer,
         text=inputs,
+        plot_sae=plot_sae,
         do_log=do_log,
         top_k=top_k,
         tokens_per_row=tokens_per_row,

@@ -257,7 +257,7 @@ def _plot_logit_lens(
     elif probs:
         title = "Probability"
 
-        plot_kwargs.update({"cmap": "Blues_r", "vmin": 0, "vmax": 1})
+        plot_kwargs.update({"cmap": "Blues", "vmin": 0, "vmax": 1})
     else:
         title = "Logits"
         vmin = np.percentile(to_show.reshape(-1), 5)

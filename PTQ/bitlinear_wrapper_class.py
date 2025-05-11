@@ -11,23 +11,21 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
-# ===================== Ternary quant wrapper ============================ 
 class BitLinear(nn.Module):
     def __init__(self,
-                orig:nn.Linear,
-                dtype:torch.dtype,
-                name:str|Any='unknown',
-                act_quant:bool=False,
-                act_bits:int=8,
-                use_ternary:bool=False,
-                smart_alpha:bool=False,
-                deterministic:bool=True,
-                debug:bool=True,
-                plotting:bool=False) -> None:
-        
+                 orig:nn.Linear,
+                 dtype:torch.dtype,
+                 name:str='unknown',
+                 act_quant:bool=False,
+                 act_bits:int=8,
+                 use_ternary:bool=False,
+                 smart_alpha:bool=False,
+                 deterministic:bool=True,
+                 debug:bool=True,
+                 plotting:bool=False) -> None:
         
         super().__init__()
-        
+
         self.name = name or "UnnamedBitLinear"
         self.in_features = orig.in_features
         self.out_features = orig.out_features
@@ -38,12 +36,14 @@ class BitLinear(nn.Module):
         self.use_ternary = use_ternary
         self.smart_alpha = smart_alpha
         self.deterministic = deterministic
+        self.orig_weight = orig.weight.detach().clone()
+        self.orig_bias = orig.bias.detach().clone() if orig.bias is not None else None
+        self.act_scale_initialized = False
         self.debug = debug
         self.debugger = None
         self.plotting = plotting
 
-        # Register buffers
-        self.register_buffer('orig_weight', orig.weight.data.clone())
+        # Register buffers for ternary quantized weights and alpha
         self.register_buffer('ternary_weight', torch.zeros_like(orig.weight))
         self.register_buffer('alpha', torch.tensor(0.0))
         self.register_buffer('tau', torch.tensor(0.0))
@@ -53,90 +53,69 @@ class BitLinear(nn.Module):
         else:
             self.bias = None
 
-        if act_quant:
-            self.register_buffer('act_scale', torch.tensor(1.0))
-            self.act_scale_initialized = False
+        # Register act_scale buffer if activation quantization is enabled
+        if act_quant and not hasattr(self, 'act_scale'):
+            self.register_buffer('act_scale', torch.tensor(1.0))  # Initialize act_scale buffer
 
+        self.act_scale_initialized = self.act_scale is not None
 
-    def quantize_ternary(self:BitLinear,
-                         tensor:torch.Tensor,
-                         sparsity_ratio:float=0.67,
-                         sample_ratio:float=0.01,
-                         deterministic:bool=True) -> Tuple[torch.Tensor, float, float]:
-        
-        """BitNet-style ternary quantization with optional smarter alpha."""
-        abs_tensor = tensor.abs()
-        total_elems = abs_tensor.numel()
+    def quantize_ternary(self:BitLinear, tensor:torch.Tensor, eps:float = 1e-8, deterministic:bool=True) -> Tuple[torch.Tensor, float]:
+        """
+        Perform ternary quantization on a tensor: quantize tensor values to {-1, 0, 1}.
+        """
+        gamma = tensor.abs().mean()  # Mean absolute value as scaling factor
+        scaled = tensor / (gamma + eps)  # Avoid division by zero
+        quantized = torch.round(scaled).clamp(-1, 1)  # Round to nearest ternary value (-1, 0, 1)
+        print(f"[DEBUG] Quantized: {quantized}| ")
+        packed_ternary = (quantized + 1).to(torch.uint8)  # Convert {-1, 0, 1} to {0, 1, 2} (uint8)
+        return packed_ternary, gamma.item()
 
-        num_samples = min(max(2048, int(sample_ratio * total_elems)), total_elems)
-        flat = abs_tensor.flatten()
+    def quantize(self:BitLinear, weight:Optional[torch.Tensor]=None) -> None:
+        """
+        Quantizes ternary weights in-place or from an input tensor.
 
-        if deterministic:
-            sample = flat[:num_samples]
-        else:
-            indices = torch.randperm(total_elems, device=abs_tensor.device)[:num_samples]
-            sample = flat[indices]
+        If `weight` is None, defaults to self.orig_weight.
+        """
+        if not self.use_ternary:
+            return
 
-        tau = torch.quantile(sample, sparsity_ratio)
-        ternary = torch.where(abs_tensor >= tau, torch.sign(tensor), torch.zeros_like(tensor))
-        print(f"[DEBUG] Unpacked Ternary Tensor: {ternary} | ")
-        packed_ternary = (ternary + 1).to(torch.uint8)
-        print(f"[DEBUG] Packed Ternary Tensor: {packed_ternary} | ")
-        actual_sparsity = (ternary == 0).float().mean().item()
-        print(f"[INFO] Quantized ternary sparsity: {actual_sparsity:.2%}")
+        # Use passed weight or fall back to internal one (self.orig_weight)
+        weight_to_quant = weight if weight is not None else self.orig_weight
 
-        if self.smart_alpha:
-            non_zero_mask = (abs_tensor >= tau)
-            alpha = abs_tensor[non_zero_mask].mean() if non_zero_mask.sum() > 0 else abs_tensor.mean()
-        else:
-            alpha = abs_tensor.mean()
+        # Quantize ternary
+        q_w, gamma = self.quantize_ternary(weight_to_quant.float())  # No 'deterministic' argument
 
-        return packed_ternary, tau.item(), alpha.item()
-
-
-    def quantize(self:BitLinear, weight:torch.Tensor, deterministic:bool=True):
-        """Quantize weights to ternary and store them."""
-        if self.use_ternary:
-            q_w, tau, alpha = self.quantize_ternary(weight.float(), deterministic=self.deterministic)
-
-            self.ternary_weight.data.copy_(q_w.to(self.ternary_weight.dtype))
-            self.alpha.data.copy_(torch.tensor(alpha, device=self.alpha.device))
-            self.tau.data.copy_(torch.tensor(tau, device=self.tau.device))
-        else:
-            # Other quantization modes could be added here.
-            pass
-
+        # Store ternary and alpha
+        self.ternary_weight.data.copy_(q_w.to(self.ternary_weight.dtype))
+        self.alpha.data.copy_(torch.tensor(gamma, device=self.alpha.device))
+        # Cache dequantized weights for forward()
+        self.dequantized_weight = self.dequantize()
 
     def dequantize(self:BitLinear) -> torch.Tensor:
-        """ Reverse ternary quantization """
-        if self.ternary_weight is None:
-            raise RuntimeError("Ternary weights not initialized! Please call .quantize() first.")
-        unpacked_ternary = (self.ternary_weight.float() - 1)  # 0,1,2 → -1,0,1
-        return unpacked_ternary * self.alpha
+        """
+        Dequantizes ternary weights (maps {0, 1, 2} back to {-1, 0, 1}).
+        """
+        dequantized = self.ternary_weight.float() - 1  # Map {0, 1, 2} back to {-1, 0, 1}
+        return dequantized
 
-    
-    def dequantize_activation(self:BitLinear, act_int8:torch.Tensor) -> torch.Tensor:
+    def dequantize_activation(self: BitLinear, act_int8: torch.Tensor) -> torch.Tensor:
+        """
+        Dequantizes an activation tensor from int8 back to floating-point.
+        """
         scale = self.act_scale.item()
         out = act_int8.float() * scale
         return torch.nan_to_num(out, nan=0.0, posinf=1e4, neginf=-1e4)
 
-
     def quantize_activation(self:BitLinear, input:torch.Tensor, return_int:bool=False) -> torch.Tensor:
-        if not hasattr(self, 'act_scale'):
-            return input
-
-        #n_bits = self.act_bits
-        qmin = -127
-        qmax = 127
-        #scale = max(self.act_scale.item(), 1e-5)  # avoid div by near-zero  (or 1e-4)
-        #scale = max(self.act_scale.item(), 1e-4)
-        scale = max(self.act_scale.item(), 1e-2)
+        """
+        Quantizes activation input to a fixed bit-width and returns the quantized version.
+        """
+        if self.act_scale is None or not self.act_scale_initialized:
+            raise RuntimeError(f"act_scale is not initialized! Please call calibrate_activation() first.")
         
-        input_int = (input / scale).round().clamp(qmin, qmax).to(torch.int8)
-        #input_int = (input / scale).round().clamp(-127, 127).to(torch.int8)
-
-        if self.debug:
-            print(f"[{self.name}] Act q range: {input_int.min().item()} to {input_int.max().item()}")
+        Qb = (2 ** (self.act_bits - 1)) - 1  # Max value for int8
+        scale = max(self.act_scale.item(), 1e-5)  # Avoid division by zero
+        input_int = (input / scale).round().clamp(-Qb, Qb).to(torch.int8)
 
         self.last_quantized_act = input_int.detach().cpu()
 
@@ -145,68 +124,95 @@ class BitLinear(nn.Module):
         else:
             input_dequant = input_int.float() * scale
             input_dequant = torch.nan_to_num(input_dequant, nan=0.0, posinf=1e4, neginf=-1e4)
-
-            if self.debug and self.debugger is not None:
-                self.debugger.compare_activations(self.name, input, input_dequant)
-            elif self.plotting:
-                self.plot_activation(input, input_dequant)
-
             return input_dequant
 
+    def calibrate_activation(self:BitLinear, input:torch.Tensor, act_bits:int=8, force:bool=False, percentile:float=0.999) -> None:
+        """
+        Calibrates the activation scale (act_scale) based on the input tensor.
+        """
+        if not self.act_quant or (self.act_scale_initialized and not force):
+            return
 
-    def calibrate_activation(self:BitLinear, input:torch.Tensor, act_bits:int=8, force:bool=False, percentile:float=0.9999):
-        if self.act_quant and (not self.act_scale_initialized or force):
-            qmax = (2 ** (act_bits - 1)) - 1
-            abs_input = input.clone().detach().abs().flatten()
+        Qb = (2 ** (act_bits - 1)) - 1  # Max value for int8
+        abs_input = input.detach().abs().flatten()
 
-            if abs_input.numel() == 0:
-                print(f"[WARN] Empty input in {self.name} during calibration.")
-                return
+        if abs_input.numel() == 0:
+            print(f"[WARN] Empty input in {self.name} during calibration.")
+            return
 
-            k = int(abs_input.numel() * percentile)
-            k = min(max(k, 1), abs_input.numel())  # clip to valid range
+        k = max(1, int(abs_input.numel() * percentile))
+        topk_val, _ = torch.topk(abs_input, k, largest=True)
+        max_val = topk_val[-1]
+        scale = max(max_val.item(), 1e-5) / Qb
 
-            topk_val, _ = torch.topk(abs_input, k, largest=True, sorted=True)
-            max_val = topk_val[-1]
-
-            # Use mean instead of max for scaling factor
-            mean_val = abs_input.mean()
-
-            # Avoiding overly small scaling factors
-            #scale = max(max_val.item(), 1e-5) / qmax # more BitNet-style and outlier-safe
-            #scale = max(max_val.item(), 1e-4) / qmax
-            scale = max(max_val.item(), 1e-2) / qmax  
+        if self.act_scale is None:
+            self.act_scale = torch.tensor(scale, device=input.device)
+        else:
             self.act_scale.copy_(torch.tensor(scale, device=self.act_scale.device))
-            self.act_scale_initialized = True
 
-            print(f"[DEBUG] {self.name} input stats -> min: {input.min().item():.5e}, max: {input.max().item():.5e}, std: {input.std().item():.5e}")
-            print(f"[{self.name}] Calib input stats — mean: {input.mean():.4e}, std: {input.std().item():.4e}, min: {input.min().item():.4f}, max: {input.max().item():.4f}")
-            print(f"[Calibration] {self.name} | Max Activation: {max_val.item():.5f} | Mean Activation: {mean_val.item():.5f} | Scale: {scale:.8f}")
+        self.act_scale_initialized = True
+        print(f"[Calibration] {self.name} | Max Activation: {max_val.item():.5f} | Scale: {scale:.8f}")
 
-
-    def freeze_quantization(self:BitLinear):
+    def freeze_quantization(self:BitLinear) -> None:
+        """
+        Freezes quantization by disabling debug mode.
+        """
         self.debug = False
-        if self.act_quant and not self.act_scale_initialized: # minimal unless tracking hooks etc.
+        if self.act_quant and not self.act_scale_initialized:
             raise RuntimeError(f"Activation scale for {self.name} not calibrated yet!")
 
-    
     def forward(self:BitLinear, input:torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass with quantized activations and weights.
+        """
         if self.debug:
             print(f"[{self.name}] input.mean(): {input.mean().item()}, input.std(): {input.std().item()}")
-            self.input_activation = input.detach().cpu()  # Save for inspection
+            self.input_activation = input.detach().cpu()
 
-        if self.act_quant and self.act_scale_initialized:
+        # Ensure act_scale is calibrated before quantization
+        if not self.act_scale_initialized:
+            self.calibrate_activation(input)
+
+        if self.act_quant:
             input = self.quantize_activation(input)
-            #input_int8 = self.quantize_activation(input, return_int=True)
-
 
         weight = self.dequantize() if self.use_ternary else self.orig_weight
-        if weight.dtype != input.dtype:
-            weight = weight.to(input.dtype)
+        bias = self.bias
+        if bias is not None:
+            bias = bias.to(input.dtype).to(input.device)
 
-        bias = self.bias.to(input.device) if self.bias is not None else None
         return F.linear(input, weight, bias)
 
+    def pack_ternary_to_bytes(self:BitLinear, ternary:torch.Tensor) -> torch.ByteTensor:
+        """
+        Packs ternary values in {0, 1, 2} (as uint8) into bytes (4 values per byte).
+        Returns a flattened byte tensor.
+        """
+        ternary = ternary.view(-1)
+        padding = (4 - (ternary.numel() % 4)) % 4
+        if padding > 0:
+            ternary = torch.cat([ternary, torch.zeros(padding, dtype=ternary.dtype, device=ternary.device)])
+
+        ternary = ternary.to(torch.uint8)
+        packed = (
+            (ternary[0::4] << 6) |
+            (ternary[1::4] << 4) |
+            (ternary[2::4] << 2) |
+            ternary[3::4]
+        )
+        return packed
+
+    def unpack_bytes_to_ternary(self:BitLinear, packed:torch.ByteTensor, original_shape:torch.Size) -> torch.Tensor:
+        """
+        Unpacks bytes to ternary values in {0, 1, 2}.
+        Returns tensor in original shape.
+        """
+        unpacked = torch.empty(packed.numel() * 4, dtype=torch.uint8, device=packed.device)
+        unpacked[0::4] = (packed >> 6) & 0b11
+        unpacked[1::4] = (packed >> 4) & 0b11
+        unpacked[2::4] = (packed >> 2) & 0b11
+        unpacked[3::4] = packed & 0b11
+        return unpacked[:torch.prod(torch.tensor(original_shape))].view(original_shape)
 
     def plot_activation(self:BitLinear, input:torch.Tensor, input_dequant:torch.Tensor):
         """ Optional visualization for debugging quantization quality """

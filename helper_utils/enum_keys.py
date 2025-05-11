@@ -25,6 +25,7 @@ class ModelKey(Enum):
     OLMO_7B = 'allenai/OLMo-7B-hf'
     OLMO_7B_2T = 'allenai/OLMo-7B-Twin-2T-hf'
     B158_KEY = 'microsoft/bitnet-b1.58-2B-4T'
+    QWEN_5B = 'Qwen/Qwen2-0.5B'
 
 
 class FPKey(Enum):
@@ -44,6 +45,8 @@ class FPKey(Enum):
     OLMO1B_TOKENIZER:str = 'Decoders/allenai/1B/OLMo-1B-hf-tokenizer'
     OLMO7B2T_FP:str = 'Decoders/allenai/7B2T/OLMo-7B-Twin-2T-hf-fp'
     OLMO7B2T_TOKENIZER:str = 'Decoders/allenai/7B2T/OLMo-7B-Twin-2T-hf-tokenizer'
+    QWEN5B_FP:str = 'Decoders/Qwen/Qwen/Qwen2-0.5B'
+    QWEN5B_TOKENIZER:str = 'Decoders/Qwen/Qwen/Qwen2-0.5B-tokenizer'
 
 
 class PTDQKey3B(Enum):

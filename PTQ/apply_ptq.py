@@ -107,7 +107,7 @@ def applyPTQ(
         layers_to_quant_weights:Optional[List[str]]|None=None,
         layers_to_quant_activations:Optional[List[str]]|None=None,
         fragile_layers:bool=False,
-        act_quant:bool=False,
+        act_quant:bool=True,
         act_bits:int|None=8,
         smart_aplha:bool=True,
         deterministic:bool=True,
@@ -145,10 +145,8 @@ def applyPTQ(
     hooks = collector.register_hooks(model)
 
     default_layers = ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj']
-    if layers_to_quant_weights is None:
+    if layers_to_quant_weights is None or layers_to_quant_activations is None:
         layers_to_quant_weights = default_layers
-    
-    if layers_to_quant_activations is None:
         layers_to_quant_activations = default_layers
 
     print(f"|| Quant Configs: {mode} | BitNet-style PTQ as: {'PTSQ' if act_quant else 'PTDQ'} ||")
@@ -160,8 +158,9 @@ def applyPTQ(
         q_layers = ['embed_tokens', 'lm_head', 'norm', 'layernorm'] if q_lmhead else ['embed_tokens', 'norm', 'layernorm']
         if safer_quant:
             if any(skip in name for skip in q_layers): # no impact 'lm_head' for 7B+: https://medium.com/@NeuralCompressor/10-tips-for-quantizing-llms-and-vlms-with-autoround-923e733879a7#:~:text=However%2C%20quantizing%20the%20LM%2Dhead,provides%20a%20reasonable%20compression%20rate.
-                quantize_weights = False
-                quantize_activations = False
+                #quantize_weights = False
+                quantize_weights = True if layers_to_quant_weights == ["*"] else any(layer in name for layer in layers_to_quant_weights)
+                quantize_activations = True if layers_to_quant_activations == ["*"] else any(layer in name for layer in layers_to_quant_activations)
 
         return quantize_weights, quantize_activations, this_mode
         
@@ -204,81 +203,41 @@ def applyPTQ(
     if torch_backends:
         set_deterministic()
 
+    # Ensure that calibration is done before freezing quantization
     if act_quant:
-        print(">> [STEP 2] Run calibration pass with full-precision weights to collect correct activation stats...")
-        
-        @torch.no_grad()
-        def calibrate_model(model, tokenizer):
-            model.eval()
-            scale_log = {}
-
-            def collect_activation(module, input, output):
-                if isinstance(module, BitLinear) and module.act_quant:
-                    print(f"[Hook] {module.name} input shape: {input[0].shape}")
-                    module.calibrate_activation(input[0], act_bits=act_bits, force=True)
-                    scale_log[module.name] = module.act_scale.item()
-                    for name, scale in scale_log.items():
-                        print(f"{name:40s} | scale: {scale:.6f}")
-
-            hooks = []
-            for m in model.modules():
-                if isinstance(m, BitLinear) and m.act_quant:
-                    hook = m.register_forward_hook(collect_activation)
-                    hooks.append(hook)
-
+        print(">> [STEP 2] Running activation calibration forward pass...")
+        model.eval()
+        with torch.no_grad():
             for text in calibration_texts:
-                if not text.strip():
-                    continue
-                """dummy_input = text_to_input_ids(tokenizer=tokenizer, text=text).to(next(model.parameters()).device)
-                if dummy_input.numel() == 0:
-                    continue
-                _ = model(dummy_input)  # Run forward pass"""
                 input_dict = text_to_input_ids(tokenizer=tokenizer, text=text)
                 input_dict = {k: v.to(next(model.parameters()).device) for k, v in input_dict.items()}
                 if input_dict["input_ids"].numel() == 0:
                     continue
                 _ = model(**input_dict)
 
-            # Remove hooks after calibration
-            for hook in hooks:
-                hook.remove()
 
-        calibrate_model(model, tokenizer)
-
-        if fragile_layers:
-            fragile_layers = [name for name, metrics in collector.stats.items() if metrics['std'] < 1e-5] # 1e-4
-            print(f"[INFO] Fragile layers detected (std < 1e-5): {fragile_layers}")
-            print("[INFO] Deactivating act quant for fragile layers:")
-            for name in fragile_layers:
-                print(f"  - {name}")
-                for n, m in model.named_modules():
-                    if isinstance(m, BitLinear) and name in n:
-                        m.act_quant = False
-            # Clean up the stats hooks
-            for h in hooks:
-                h.remove()
+        # Optional: print calibrated scales
+        for name, module in model.named_modules():
+            if isinstance(module, BitLinear) and module.act_quant:
+                print(f"[Calibrated] {name:50s} | act_scale: {module.act_scale.item():.6f}")
 
     # Re-enable ternary quantization before weight quantization
     for _, module in model.named_modules():
         if isinstance(module, BitLinear):
             module.use_ternary = True
+    print(">> [STEP 3] Applying weight quantization...")
+    
+    for name, module in model.named_modules():
+        if isinstance(module, BitLinear) and module.use_ternary:
+            module.quantize()  # Now supported with no args
+            print(f"[Quantized] {name} | Ternary weights applied.")
 
-    print(">> [STEP 3]: Quantizing weights (after activation calibration)...")
-    for name, module in bitlinear_layers:
-        module.quantize(module.orig_weight, deterministic=deterministic)
-        print(f"[1.58-bit] {name} | τ={module.tau:.4f} | α={module.alpha:.4f} | shape={module.orig_weight.shape}")
-
-    if debugger:
-        debugger.summarize()
-
-    collector.report(sort_by='std', top_k=20)
-    print(">> [INFO] Quantization complete!")
-
+    # Freezing quantization after calibration is done
     if freeze_modules:
         print(">> [STEP 4]: Freezing modules...")
         for m in model.modules():
             if isinstance(m, BitLinear):
-                m.freeze_quantization() # disables recalibration, debug mode, etc.
+                m.freeze_quantization()  # disables recalibration, debug mode, etc.
             for param in m.parameters(): 
                 param.requires_grad = False  # prevents accidental updates
 
