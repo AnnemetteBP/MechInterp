@@ -168,7 +168,7 @@ def collect_logit_lens_metrics_batch(
         try:
             layer_logits, _ = collect_batch_logits(model, input_ids_tensor, layer_names, [])
 
-            # 🔧 Handle shape: [layers, batch, seq_len, hidden] → [layers, seq_len, hidden]
+            # Handle shape: [layers, batch, seq_len, hidden] → [layers, seq_len, hidden]
             if isinstance(layer_logits, list):
                 layer_logits = np.stack(layer_logits, axis=0)
             if layer_logits.ndim == 4 and layer_logits.shape[1] == 1:
@@ -176,49 +176,49 @@ def collect_logit_lens_metrics_batch(
             elif layer_logits.ndim != 3:
                 raise ValueError(f"Expected layer_logits to be 3D but got shape {layer_logits.shape}")
 
-            # 🔁 Project to vocab if it's still in hidden state space
+            # Project to vocab if it's still in hidden state space
             if layer_logits.shape[-1] == model.config.hidden_size:
                 hidden_states = torch.tensor(layer_logits, dtype=torch.float32).to(model.device)
                 with torch.no_grad():
                     logits = model.lm_head(hidden_states)
                 layer_logits = logits.cpu().numpy()
 
-            # 🎯 Slice to match the token prediction window
+            # Slice to match the token prediction window
             layer_logits = layer_logits[:, start_ix + 1:end_ix + 1, :]
 
-            # 🔢 Top-k prediction postprocessing
+            # Top-k prediction postprocessing
             layer_preds, layer_probs, _ = postprocess_logits_tokp(layer_logits, top_n=topk)
             topk_indices = np.argsort(layer_probs, axis=-1)[..., -topk:][..., ::-1]
 
-            # 🎯 Ground truth target token IDs
+            # Ground truth target token IDs
             target_ids = input_ids_tensor[0, start_ix + 1:end_ix + 1].cpu().numpy()
 
-            # 📊 Metrics: entropy, correctness
+            # Metrics: entropy, correctness
             entropy = compute_entropy(layer_probs)
             prob_correct = np.take_along_axis(layer_probs, layer_preds[..., None], axis=-1).squeeze(-1)
             logit_correct = np.take_along_axis(layer_logits, layer_preds[..., None], axis=-1).squeeze(-1)
 
-            # 📌 Broadcast target IDs for top-k correctness
+            # Broadcast target IDs for top-k correctness
             target_ids_broadcasted = target_ids[None, :, None]
             correct_1 = (layer_preds == target_ids[None, :]).astype(int)
             correct_topk = np.any(topk_indices == target_ids_broadcasted, axis=-1).astype(int)
 
-            # 📈 Stability metrics
+            # Stability metrics
             stability_top1, stability_topk = compute_stability_metrics(layer_preds, topk_indices, target_ids)
 
-            # 📉 Aggregated stats
+            # Aggregated stats
             correct_1_std = np.std(correct_1, axis=1).tolist()
             correct_topk_std = np.std(correct_topk, axis=1).tolist()
             vocab_size = tokenizer.vocab_size
             norm_entropy = (entropy / np.log(vocab_size)).tolist()
 
-            # 🔄 KL divergence between layers
+            # KL divergence between layers
             layer_kl_divergences = [
                 compute_kl_divergence(layer_logits[i], layer_logits[i + 1])
                 for i in range(len(layer_logits) - 1)
             ]
 
-            # 🗃️ Store results
+            # Store results
             metrics = {
                 "prompt": input_ids_tensor.tolist(),
                 "decoded_prompt_str": tokenizer.decode(input_ids_list),
