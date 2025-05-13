@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Tuple, List, Dict, Literal, Optional, Any
+from typing import Tuple, List, Dict, Literal, Optional, Any, Union
 
 from functools import partial
 from typing import Tuple, List, Dict, Any
@@ -28,8 +28,8 @@ from .layer_names import make_layer_names
     toks = tokenizer.encode(text, return_tensors="pt")
     return torch.as_tensor(toks).view(1, -1).cpu()"""
 
-def text_to_input_ids(tokenizer:Any, text:str, model:Optional[torch.nn.Module]=None) -> torch.Tensor:
-    """ Encode inputs and move them to the model's device """
+"""def text_to_input_ids(tokenizer:Any, text:str, model:Optional[torch.nn.Module]=None) -> torch.Tensor:
+    #Encode inputs and move them to the model's device
     toks = tokenizer.encode(text, return_tensors="pt")
 
     if model is not None:
@@ -39,7 +39,32 @@ def text_to_input_ids(tokenizer:Any, text:str, model:Optional[torch.nn.Module]=N
             device = torch.device("cpu")
         toks = toks.to(device)
     
-    return toks
+    return toks"""
+
+def text_to_input_ids(tokenizer:Any, text:Union[str, List[str]], model:Optional[torch.nn.Module]=None, add_special_tokens:bool=True, pad_to_max_length=False) -> torch.Tensor: # NEW
+    """
+    Tokenize the inputs, respecting padding behavior.
+    """
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token  # Ensure EOS token is used if padding is missing
+
+    is_single = isinstance(text, str)
+    texts = [text] if is_single else text
+
+    # Padding to the longest sequence in the batch or to max length
+    tokens = tokenizer(
+        texts,
+        return_tensors="pt",
+        padding="longest" if not pad_to_max_length else True,  # Padding only to longest sequence
+        truncation=True,
+        add_special_tokens=add_special_tokens,
+    )["input_ids"]
+
+    if model is not None:
+        device = next(model.parameters()).device
+        tokens = tokens.to(device)
+
+    return tokens  # shape: [batch_size, seq_len]
 
 
 def collect_logits(model, input_ids, layer_names, decoder_layer_names):
@@ -181,6 +206,7 @@ def nwd(p, q, axis=-1, clip=1e-6):  # <-- Increase clip
 
     # Reshape back to (batch, seq_len)
     distances = distances.reshape(p.shape[0], p.shape[1])
+    print(f"[Distances] {distances} | \n[NWD] {distances/vocab_size} |\n")
     return distances / vocab_size
 
 
@@ -296,7 +322,7 @@ def _plot_comparing_lens(
     ]
     ax_targets.set_xticklabels(starred, rotation=0)
     
-    plt.title(title, fontsize=12, fontweight='bold', pad=10)
+    #plt.title(title, fontsize=12, fontweight='bold', pad=10)
 
     if save_fig_path is not None:
         plt.savefig(save_fig_path)
@@ -318,68 +344,9 @@ def plot_comparing_lens(
     include_subblocks:bool=False,
     decoder_layer_names:list = ['norm', 'lm_head'],
     top_down:bool=False,
-    verbose:bool=False
+    verbose:bool=False,
+    topk:Optional[int|None]=None
 ):
-    """
-    Draws "comparing logit lens" plots using first model in list as true distribution, and generalizations thereof.
-
-    Base code for Logit Lens from nostalgebraist (thanks btw) GitHub: https://github.com/nostalgebraist/transformer-utils
-
-    `models`, `tokenizer` and `input_ids` should be familiar from the transformers library.  Other args are documented below.
-
-    Here `models` should be a tuple of two `transformers.PreTrainedModel` with an LLaMA / OLMo architecture
-        - to work for e.g., GPT2 see orgiginal nostalgebraist: https://github.com/nostalgebraist/transformer-utils
-        - The first model in tuple `model[0]` is used as true distribution for `model[1]`.
-
-    Note that using `start_ix` and `end_ix` is not equivalent to passed an `input_ids` sliced like `input_ids[start_ix:end_ix]`. 
-    The LM will see the entire input you pass in as `input_ids`, no matter how you set `start_ix` and `end_ix`.  These "ix" arguments only control what is _displayed_.
-
-    The boolean arguments `kl`, `js` and `wasserstein` control the type of plot.  The options are:
-
-        - KL:
-            - cell color: KL divergence of each layer's probability distribtion w/r/t the final layer's
-            - cell text:  same as cell color / top-1 token prediction at each layer
-
-        - JS:
-            - cell color: jensen-Shannon divergence of each layer's probability distribtion w/r/t the final layer's
-            - cell text:  same as cell color / top-1 token prediction at each layer
-
-        - Normalized Wasserstein (NWD):
-            - cell color: NWD of each layer's probability distribtion w/r/t the final layer's
-            - cell text:  same as cell color / top-1 token prediction at each layer
-
-    `include_subblocks` and `decoder_layer_names` allow the creation of plots that go beyond what was done
-    in the original blog post.  See below for details
-
-    Arguments:
-
-        kl:
-            draw a "KL" plot
-        js:
-            draw a "JS" plot 
-        wasserstein:
-            draw a "Normalized Wasserstein" plot (if all is False, `wasserstein` is set)
-        save_fig_path:
-            save a plot to path if not None: str | None
-        block_step:
-            stride when choosing blocks to plot, e.g. block_step=2 skips every other block
-        include_input:
-            whether to treat the input embeddings (before any blocks have been applied) as a "layer"
-        force_include_output:
-            whether to include the final layer in the plot, even if the passed `block_step` would otherwise skip it
-        include_subblocks:
-            if True, includes predictions after the only the attention part of each block, along with those after the
-            full block
-        decoder_layer_names:
-            defines the subset of the model used to "decode" hidden states.
-
-            The default value `['final_layernorm', 'lm_head']` corresponds to the ordinary "logit lens," where
-            we decode each layer's output as though it were the output of the final block.
-
-            Prepending one or more of the last layers of the model, e.g. `['h11', 'final_layernorm', 'lm_head']` - for LLaMAs 'final_layernorm' should be 'norm'
-            for a 12-layer model, will treat these layers as part of the decoder.  In the general case, this is equivalent
-            to dropping different subsets of interior layers and watching how the output varies.
-    """    
 
     def multiple_layer_names(model_1:Any, model_2:Any) -> Tuple[List[str], List[str]]:
         layer_names_1 = make_layer_names(
@@ -423,16 +390,29 @@ def plot_comparing_lens(
     input_ids_1 = input_ids.to(next(model_1.parameters()).device)
     input_ids_2 = input_ids
     
-    layer_logits_1, layer_names_1 = collect_logits(
-        model_1, input_ids_1, layer_names=layer_names_1, decoder_layer_names=decoder_layer_names,
-    )
+    if topk:
+        layer_logits_1, layer_names_1 = collect_logits(
+            model_1, input_ids_1, layer_names=layer_names_1, decoder_layer_names=decoder_layer_names,
+        )
 
-    layer_logits_2, layer_names_2 = collect_logits(
-        model_2, input_ids_2, layer_names=layer_names_2, decoder_layer_names=decoder_layer_names,
-    )
-        
-    layer_preds_1, layer_probs_1 = postprocess_logits(layer_logits_1)
-    layer_preds_2, layer_probs_2 = postprocess_logits(layer_logits_2)
+        layer_logits_2, layer_names_2 = collect_logits(
+            model_2, input_ids_2, layer_names=layer_names_2, decoder_layer_names=decoder_layer_names,
+        )
+            
+        layer_preds_1, layer_probs_1 = postprocess_logits(layer_logits_1)
+        layer_preds_2, layer_probs_2 = postprocess_logits(layer_logits_2)
+
+    else:
+        layer_logits_1, layer_names_1 = collect_logits(
+            model_1, input_ids_1, layer_names=layer_names_1, decoder_layer_names=decoder_layer_names,
+        )
+
+        layer_logits_2, layer_names_2 = collect_logits(
+            model_2, input_ids_2, layer_names=layer_names_2, decoder_layer_names=decoder_layer_names,
+        )
+            
+        layer_preds_1, layer_probs_1 = postprocess_logits(layer_logits_1)
+        layer_preds_2, layer_probs_2 = postprocess_logits(layer_logits_2)
 
 
     _plot_comparing_lens(

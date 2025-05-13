@@ -85,13 +85,13 @@ def _plot_token_heatmap(
         showscale=True,
         texttemplate="%{text}",
         #textfont={"size": 10, "color": "black", "family": "Times New Roman"},
-        textfont={"size": 10, "family": "Times New Roman"},
+        textfont={"size": 10, "family": "DejaVu Sans"},
         xgap=2, ygap=2
     ))
 
     fig.update_layout(
         title=f"Top-k {top_k} Token Activation",
-        title_font=dict(size=12, family="Times New Roman"),
+        title_font=dict(size=12, family="DejaVu Sans"),
         width=max(600, tokens_per_row * 50),
         height=num_rows * 50 + 100,
         margin=dict(l=20, r=20, t=40, b=20),

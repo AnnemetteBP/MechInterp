@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Tuple, List, Dict, Any, Optional
+from typing import Tuple, List, Dict, Any, Optional, Union
 import torch
 import numpy as np
 
@@ -25,8 +25,8 @@ from .layer_names import make_layer_names
     toks = tokenizer.encode(text, return_tensors="pt")
     return torch.as_tensor(toks).view(1, -1).cpu()"""
 
-def text_to_input_ids(tokenizer:Any, text:str, model:Optional[torch.nn.Module]=None) -> torch.Tensor:
-    """ Encode inputs and move them to the model's device """
+"""def text_to_input_ids(tokenizer:Any, text:str, model:Optional[torch.nn.Module]=None) -> torch.Tensor:
+    #Encode inputs and move them to the model's device
     toks = tokenizer.encode(text, return_tensors="pt")
 
     if model is not None:
@@ -36,7 +36,32 @@ def text_to_input_ids(tokenizer:Any, text:str, model:Optional[torch.nn.Module]=N
             device = torch.device("cpu")
         toks = toks.to(device)
     
-    return toks
+    return toks"""
+
+def text_to_input_ids(tokenizer:Any, text:Union[str, List[str]], model:Optional[torch.nn.Module]=None, add_special_tokens:bool=True, pad_to_max_length=False) -> torch.Tensor: # NEW
+    """
+    Tokenize the inputs, respecting padding behavior.
+    """
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token  # Ensure EOS token is used if padding is missing
+
+    is_single = isinstance(text, str)
+    texts = [text] if is_single else text
+
+    # Padding to the longest sequence in the batch or to max length
+    tokens = tokenizer(
+        texts,
+        return_tensors="pt",
+        padding="longest" if not pad_to_max_length else True,  # Padding only to longest sequence
+        truncation=True,
+        add_special_tokens=add_special_tokens,
+    )["input_ids"]
+
+    if model is not None:
+        device = next(model.parameters()).device
+        tokens = tokens.to(device)
+
+    return tokens  # shape: [batch_size, seq_len]
 
 def collect_logits(model, input_ids, layer_names, decoder_layer_names):
 
@@ -215,7 +240,7 @@ def _plot_logit_lens(
     aligned_texts = aligned_texts[::-1]
 
     fig = plt.figure(figsize=(1.5 * to_show.shape[1], 0.375 * to_show.shape[0]))
-    plt.rcParams['font.family'] = 'Times New Roman'
+    plt.rcParams['font.family'] = 'Times New Roman' # 'DejaVu Sans' 'Noto Sans'
     plot_kwargs = {"annot": aligned_texts, "fmt": ""}
     if kl:
         #vmin, vmax = None, None
@@ -306,7 +331,7 @@ def _plot_logit_lens(
     ]
     ax_targets.set_xticklabels(starred, rotation=0)
     
-    plt.title(title, fontsize=12, fontweight="bold", pad=10)
+    #plt.title(title, fontsize=12, fontweight="bold", pad=10)
 
     if save_fig_path is not None:
         plt.savefig(save_fig_path)
@@ -329,7 +354,8 @@ def plot_logit_lens(
     include_subblocks:bool=False,
     decoder_layer_names:list=['norm', 'lm_head'],
     top_down:bool=False,
-    verbose:bool=False
+    verbose:bool=False,
+    topk:Optional[int|None]= None
 ):
     """
     Draws "logit lens" plots, and generalizations thereof.
@@ -414,12 +440,20 @@ def plot_logit_lens(
 
     input_ids = text_to_input_ids(tokenizer, input_ids, model)
 
-    layer_logits, layer_names = collect_logits(
-        model, input_ids, layer_names=layer_names, decoder_layer_names=decoder_layer_names,
-        )
-    
-    layer_preds, layer_probs = postprocess_logits(layer_logits)
+    if topk:
+        layer_logits, layer_names = collect_logits(
+            model, input_ids, layer_names=layer_names, decoder_layer_names=decoder_layer_names,
+            )
+        
+        layer_preds, layer_probs = postprocess_logits(layer_logits)
 
+    else:
+        layer_logits, layer_names = collect_logits(
+            model, input_ids, layer_names=layer_names, decoder_layer_names=decoder_layer_names,
+            )
+        
+        layer_preds, layer_probs = postprocess_logits(layer_logits)
+    
 
     _plot_logit_lens(
         layer_logits=layer_logits,

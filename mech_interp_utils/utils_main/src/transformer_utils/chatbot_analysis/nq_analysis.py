@@ -70,14 +70,28 @@ def _run_nq_analysis(
     # --- PROMPT PREP ---
     full_prompt = f"{context.strip()}\n{prompt.strip()}\nAnswer:"
 
+    # --- Ensure special tokens are set properly ---
     if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+        print(f"[DEBUG] tokenizer type: {type(tokenizer)}")
+        assert hasattr(tokenizer, "pad_token"), f"Expected tokenizer-like object, got: {type(tokenizer)}"
+
+        if tokenizer.eos_token is not None:
+            tokenizer.pad_token = tokenizer.eos_token
+            print("[INFO] pad_token was None; set to eos_token.")
+        else:
+            tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+            print("[WARNING] pad_token and eos_token were None; added '[PAD]' as pad_token.")
+
+    # Update model config with pad_token_id if not already set
+    if getattr(model.config, 'pad_token_id', None) is None:
         model.config.pad_token_id = tokenizer.pad_token_id
 
-    input_dict = tokenizer(full_prompt, return_tensors='pt', padding=True)
+    # --- Tokenize input ---
+    input_dict = tokenizer(full_prompt, return_tensors='pt', padding=True, truncation=True)
     input_ids = input_dict['input_ids'].to(model_device)
     attention_mask = input_dict['attention_mask'].to(model_device)
 
+    # --- Deterministic setup ---
     if deterministic_backend:
         set_deterministic_backend()
 
@@ -91,10 +105,12 @@ def _run_nq_analysis(
             temperature=temperature,
             repetition_penalty=repetition_penalty,
             do_sample=sample,
-            eos_token_id=tokenizer.eos_token_id
+            pad_token_id=tokenizer.pad_token_id,  # Needed for padding in generation
+            eos_token_id=tokenizer.eos_token_id if tokenizer.eos_token_id is not None else tokenizer.pad_token_id
         )
     latency = _end_time(gen_start)
 
+    # --- Decode output ---
     response = tokenizer.decode(generated_ids[0], skip_special_tokens=True, clean_up_tokenization_space=True)
     print(f"Generated Tokens: {generated_ids.shape[-1:]}\nResponse: {response}")
 
