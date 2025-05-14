@@ -80,6 +80,10 @@ def collect_logits(model, input_ids, layer_names, decoder_layer_names):
 
 # ===================== Probs and logits for topk > 1 and for topk plot ============================
 def postprocess_logits_tokp(layer_logits: Any, normalize_probs=False, top_n: int = 5, return_scores: bool = True) -> Tuple[Any, Any, Any]:
+
+    if layer_logits.dtype == np.float16:
+        layer_logits = layer_logits.astype(np.float32)
+        
     # Replace NaNs and infs with appropriate values
     layer_logits = np.nan_to_num(layer_logits, nan=-1e9, posinf=1e9, neginf=-1e9)
     layer_probs = scipy.special.softmax(layer_logits, axis=-1)
