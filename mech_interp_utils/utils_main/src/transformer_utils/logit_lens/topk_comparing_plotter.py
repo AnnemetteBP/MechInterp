@@ -24,6 +24,15 @@ def clear_cuda_cache():
     """Clear GPU cache to avoid memory errors during operations"""
     torch.cuda.empty_cache()
 
+def safe_cast_logits(tensor: torch.Tensor) -> torch.Tensor:
+    if tensor.dtype in [torch.float16, torch.bfloat16, torch.int8, torch.uint8]:
+        tensor = tensor.to(torch.float32)
+    return torch.nan_to_num(tensor, nan=-1e9, posinf=1e9, neginf=-1e9)
+
+def numpy_safe_cast(x):
+    x = x.astype(np.float32)
+    return np.nan_to_num(x, nan=-1e9, posinf=1e9, neginf=-1e9)
+
 # ===================== Tokenize input texts ============================
 def text_to_input_ids(tokenizer: Any, text: Union[str, List[str]], model: Optional[torch.nn.Module] = None, add_special_tokens: bool = True, pad_to_max_length=False) -> torch.Tensor:
     """
@@ -455,7 +464,8 @@ def plot_topk_comparing_lens(
     # Get logits
     layer_logits_1, layer_names_1 = collect_logits(model_1, input_ids_1, layer_names_1, decoder_layer_names)
     layer_logits_2, _ = collect_logits(model_2, input_ids_2, layer_names_2, decoder_layer_names)
-
+    layer_logits_1 = safe_cast_logits(torch.tensor(layer_logits_1)).numpy()
+    layer_logits_2 = safe_cast_logits(torch.tensor(layer_logits_2)).numpy()
     # Get predictions/probabilities
     layer_preds_1, layer_probs_1, _ = postprocess_logits_tokp(layer_logits_1, top_n=topk)
     layer_preds_2, layer_probs_2, _ = postprocess_logits_tokp(layer_logits_2, top_n=topk)

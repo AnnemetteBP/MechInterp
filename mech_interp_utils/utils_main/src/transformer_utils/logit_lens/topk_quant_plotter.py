@@ -24,48 +24,31 @@ def clear_cuda_cache() -> None:
     """Clear GPU cache to avoid memory errors during operations"""
     torch.cuda.empty_cache()
 
-def save_metrics_to_json(metrics:Dict, save_path:str) -> None:
+    
+def safe_cast_for_lens(tensor:torch.Tensor) -> torch.Tensor:
+    """
+    Prepare a tensor for use in logit lens by:
+    - Casting to float32 if it's in half, bfloat16, int8, etc.
+    - Replacing NaNs/Infs with valid values
+    """
 
-    def convert_ndarray(o):
-        if isinstance(o, np.ndarray):
-            return o.tolist()  # Convert ndarray to a list
-        elif isinstance(o, dict):
-            return {k: convert_ndarray(v) for k, v in o.items()}  # Recursively convert dict
-        elif isinstance(o, list):
-            return [convert_ndarray(i) for i in o]  # Recursively convert list
-        return o  # Return other objects as is
-
-    # Convert the entire metrics dictionary to a JSON serializable format
-    serializable_metrics = convert_ndarray(metrics)
-
-    # Save the metrics to the specified path
-    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(save_path, "w") as f:
-        json.dump(serializable_metrics, f, indent=2)
-
-def safe_cast_logits(tensor: torch.Tensor) -> torch.Tensor:
+    # Cast low precision types to float32
     if tensor.dtype in [torch.float16, torch.bfloat16, torch.int8, torch.uint8]:
         tensor = tensor.to(torch.float32)
-    return torch.nan_to_num(tensor, nan=-1e9, posinf=1e9, neginf=-1e9)
+
+    # NaN and Inf handling
+    tensor = torch.nan_to_num(tensor, nan=-1e9, posinf=1e9, neginf=-1e9)
+
+    return tensor
 
 def numpy_safe_cast(x):
     x = x.astype(np.float32)
     return np.nan_to_num(x, nan=-1e9, posinf=1e9, neginf=-1e9)
 
-def clean_prompt_list(prompts:List) -> List:
-    # Ensure all entries are plain strings (non-empty after stripping)
-    return [p for p in prompts if isinstance(p, str) and p.strip() and not isinstance(p, tuple)]
-
-def clean_and_join_prompts(list_of_line_lists):
-    cleaned_prompts = []
-    for i, lines in enumerate(list_of_line_lists):
-        try:
-            prompt = " ".join(line.strip() for line in lines if isinstance(line, str) and line.strip())
-            if prompt:
-                cleaned_prompts.append(prompt)
-        except Exception as e:
-            print(f"[ERROR] Failed to clean sample {i}: {e}")
-    return cleaned_prompts
+def safe_cast_logits(tensor: torch.Tensor) -> torch.Tensor:
+    if tensor.dtype in [torch.float16, torch.bfloat16, torch.int8, torch.uint8]:
+        tensor = tensor.to(torch.float32)
+    return torch.nan_to_num(tensor, nan=-1e9, posinf=1e9, neginf=-1e9)
 
 # ===================== Topk Lens Hooks ============================
 def topk_make_lens_hooks(model:Any, layer_names:Any, verbose=False) -> List:
@@ -210,62 +193,7 @@ def postprocess_logits_tokp(layer_logits: Any, normalize_probs=False, top_n:int=
         return layer_preds, layer_probs, top_n_scores
     else:
         return layer_preds, layer_probs
-    
-# ===================== Avg Stability ============================
-def calculate_avg_stability(stability_top1, stability_topk) -> Tuple[Any, Any]:
-    """
-    Calculate the average stability score based on top-1 and top-k metrics.
-    
-    Args:
-        stability_top1 (np.ndarray): Stability metric for top-1 predictions, shape = [tokens]
-        stability_topk (np.ndarray): Stability metric for top-k predictions, shape = [tokens]
-    
-    Returns:
-        tuple: average_stability_top1, average_stability_topk
-    """
-    avg_stability_top1 = np.mean(stability_top1[stability_top1 != -1])  # Average stability for top-1 predictions
-    avg_stability_topk = np.mean(stability_topk[stability_topk != -1])  # Average stability for top-k predictions
 
-    return avg_stability_top1, avg_stability_topk
-
-
-def compute_stability_metrics(layer_preds, topk_indices, target_ids) -> Tuple:
-    """
-    Compute the stability metrics: how quickly the model predicts the correct token 
-    in top-1 and top-k predictions relative to the depth (layers).
-
-    Args:
-        layer_preds (np.ndarray): Predicted tokens for each layer, shape = [layers, tokens]
-        topk_indices (np.ndarray): Indices of the top-k predicted tokens for each layer, shape = [layers, tokens, topk]
-        target_ids (np.ndarray): Ground truth token ids, shape = [tokens]
-
-    Returns:
-        tuple: stability_top1, stability_topk
-    """
-    
-    # 1. Stability in terms of top-1 prediction: Find the first layer where the model's top-1 prediction is correct
-    stability_top1 = np.argmax(layer_preds == target_ids, axis=0)  # First layer where correct token is top-1
-    stability_top1 = np.where(stability_top1 == 0, -1, stability_top1)  # If no layer is correct, return -1
-    
-    # 2. Stability in terms of top-k prediction: Find the first layer where the correct token is in the top-k
-    stability_topk = np.argmax(np.any(topk_indices == target_ids[None, :, None], axis=-1), axis=0)  # First layer where correct token is in top-k
-    stability_topk = np.where(stability_topk == 0, -1, stability_topk)  # If no layer is correct, return -1
-    
-    return stability_top1, stability_topk
-
-
-# ===================== Correctness ============================
-def compute_correctness_metrics(layer_preds, target_ids, topk_indices=None) -> Tuple:
-    correct_1 = (layer_preds[-1] == target_ids).astype(int)
-
-    if topk_indices is not None:
-        # target_ids: [tokens], reshape to [1, tokens, 1] to broadcast against [layers, tokens, topk]
-        target_ids_broadcasted = target_ids[None, :, None]
-        correct_topk = np.any(topk_indices == target_ids_broadcasted, axis=-1).astype(int)
-    else:
-        correct_topk = None
-
-    return correct_1, correct_topk
 
 # ===================== Collect layer logits ============================
 def collect_batch_logits(model, input_ids, layer_names, outputs) -> Tuple:
@@ -337,126 +265,8 @@ def compute_wasserstein_from_json(file_a, file_b, key="logit_mean"):
     return wasserstein_distance(m1, m2)
 
 
-# ===================== Topk-N Analysis ============================
-def collect_logit_lens_metrics_batch(
-    model:Any,
-    tokenizer:Any,
-    prompts:List[str],
-    start_ix:int,
-    end_ix:int,
-    topk:int=5,
-    prompt_type:str="text",
-    max_prompts:int=50,
-) -> List:
-    assert isinstance(prompts, list), "prompts should be a list of strings"
-    prompts = prompts[:max_prompts]
 
-    results = []
-
-    for idx, prompt in enumerate(prompts):
-        input_ids_tensor = text_to_input_ids(tokenizer, prompt, model)
-        input_ids_list = input_ids_tensor[0].tolist()
-
-        layer_names = make_layer_names_topk(model)
-
-        hook_handles = topk_make_lens_hooks(model, layer_names=layer_names)
-        if hook_handles is None:
-            print(f"[Error] No hooks were registered for prompt {idx}. Skipping.")
-            continue
-
-        try:
-            layer_logits, _ = collect_batch_logits(model, input_ids_tensor, layer_names, [])
-
-            # Handle shape: [layers, batch, seq_len, hidden] → [layers, seq_len, hidden]
-            if isinstance(layer_logits, list):
-                layer_logits = np.stack(layer_logits, axis=0)
-            if layer_logits.ndim == 4 and layer_logits.shape[1] == 1:
-                layer_logits = layer_logits[:, 0, :, :]
-            elif layer_logits.ndim != 3:
-                raise ValueError(f"Expected layer_logits to be 3D but got shape {layer_logits.shape}")
-
-            # Project to vocab if it's still in hidden state space
-            if layer_logits.shape[-1] == model.config.hidden_size:
-                hidden_states = torch.tensor(layer_logits, dtype=torch.float32).to(model.device)
-                with torch.no_grad():
-                    logits = model.lm_head(hidden_states)
-                layer_logits = logits.cpu().numpy()
-                # Clean logits immediately
-                layer_logits = np.nan_to_num(layer_logits, nan=-1e9, posinf=1e9, neginf=-1e9)
-            # Slice to match the token prediction window
-            layer_logits = layer_logits[:, start_ix + 1:end_ix + 1, :]
-
-            # Top-k prediction postprocessing
-            layer_preds, layer_probs, _ = postprocess_logits_tokp(layer_logits, top_n=topk)
-            topk_indices = np.argsort(layer_probs, axis=-1)[..., -topk:][..., ::-1]
-
-            # Ground truth target token IDs
-            target_ids = input_ids_tensor[0, start_ix + 1:end_ix + 1].cpu().numpy()
-
-            # Metrics: entropy, correctness
-            entropy = compute_entropy(layer_probs)
-            prob_correct = np.take_along_axis(layer_probs, layer_preds[..., None], axis=-1).squeeze(-1)
-            logit_correct = np.take_along_axis(layer_logits, layer_preds[..., None], axis=-1).squeeze(-1)
-
-            # Broadcast target IDs for top-k correctness
-            target_ids_broadcasted = target_ids[None, :, None]
-            correct_1 = (layer_preds == target_ids[None, :]).astype(int)
-            correct_topk = np.any(topk_indices == target_ids_broadcasted, axis=-1).astype(int)
-
-            # Stability metrics
-            stability_top1, stability_topk = compute_stability_metrics(layer_preds, topk_indices, target_ids)
-
-            # Aggregated stats
-            correct_1_std = np.std(correct_1, axis=1).tolist()
-            correct_topk_std = np.std(correct_topk, axis=1).tolist()
-            vocab_size = tokenizer.vocab_size
-            norm_entropy = (entropy / np.log(vocab_size)).tolist()
-
-            # KL divergence between layers
-            layer_kl_divergences = [
-                compute_kl_divergence(layer_logits[i], layer_logits[i + 1])
-                for i in range(len(layer_logits) - 1)
-            ]
-
-            # Store results
-            metrics = {
-                "prompt": input_ids_tensor.tolist(),
-                "decoded_prompt_str": tokenizer.decode(input_ids_list),
-                "tokens": tokenizer.convert_ids_to_tokens(input_ids_list),
-                "prompt_type": prompt_type,
-                "target_ids": target_ids.tolist(),
-                "target_tokens": tokenizer.convert_ids_to_tokens(target_ids.tolist()),
-                "layer_names": layer_names,
-                "correct_1": correct_1.mean(axis=1).tolist(),
-                "correct_topk": correct_topk.mean(axis=1).tolist(),
-                "correct_1_std": correct_1_std,
-                "correct_topk_std": correct_topk_std,
-                "correct_1_by_position": correct_1.T.tolist(),
-                "correct_topk_by_position": correct_topk.T.tolist(),
-                "entropy": entropy.mean(axis=1).tolist(),
-                "normalized_entropy": norm_entropy,
-                "logit_mean": logit_correct.mean(axis=1).tolist(),
-                "prob_mean": prob_correct.mean(axis=1).tolist(),
-                "stability_top1": stability_top1.tolist(),
-                "stability_topk": stability_topk.tolist(),
-                "layer_kl_divergences": layer_kl_divergences,
-            }
-
-            results.append(metrics)
-
-        finally:
-            if hook_handles:
-                for handle in hook_handles:
-                    handle.remove()
-            for var in ['input_ids_tensor', 'layer_logits', 'layer_preds', 'layer_probs']:
-                if var in locals():
-                    del locals()[var]
-            torch.cuda.empty_cache()
-
-    return results
-
-
-def _plot_logit_lens_plotly(
+def _plot_quant_lens_plotly(
     layer_logits,
     layer_preds,
     layer_probs,
@@ -668,17 +478,14 @@ def _plot_logit_lens_plotly(
     fig.show()
 
 
-def plot_topk_logit_lens(
+def plot_topk_quant_lens(
     model:Any,
     tokenizer:Any,
     inputs:Union[str, List[str], None],
     start_ix:int,
     end_ix:int,
     topk:int=5,
-    plot_topk_lens:bool=True,
     topk_mean:bool=True,
-    save_fig_path:str|None=None,
-    json_log_path:str|None=None,
     probs:bool=False,
     entropy:bool=False,
     kl:bool=False,
@@ -697,10 +504,10 @@ def plot_topk_logit_lens(
     
     rank_matrix_raw = None
     pred_ranks = None
-
     metric_type = None
+
     if model_precision:
-        model = model.to(model_precision) 
+        model = model.to(model_precision)
         
     # Handle input format and ensure it's a list of prompts
     if isinstance(inputs, str):
@@ -708,159 +515,148 @@ def plot_topk_logit_lens(
     elif inputs is None:
         inputs = ["What is y if y=2*2-4+(3*2)"]  # Default prompt
 
-    if plot_topk_lens:
-        # Create layer names for the model layers
-        layer_names = make_layer_names(
-            model,
-            block_step=block_step,
-            include_input=include_input,
-            force_include_output=force_include_output,
-            include_subblocks=include_subblocks,
-            decoder_layer_names=decoder_layer_names
-        )
+    # Create layer names for the model layers
+    layer_names = make_layer_names(
+        model,
+        block_step=block_step,
+        include_input=include_input,
+        force_include_output=force_include_output,
+        include_subblocks=include_subblocks,
+        decoder_layer_names=decoder_layer_names
+    )
 
-        # Register hooks
-        #hook_handles = make_lens_hooks(model, start_ix=start_ix, end_ix=end_ix, layer_names=layer_names, decoder_layer_names=decoder_layer_names, verbose=verbose)
-        make_lens_hooks(model, start_ix=start_ix, end_ix=end_ix, layer_names=layer_names, decoder_layer_names=decoder_layer_names, verbose=verbose)
-        # Tokenize inputs with padding control
-        input_ids = text_to_input_ids(tokenizer, inputs, model, pad_to_max_length=pad_to_max_length)
+    # Register hooks
+    #hook_handles = make_lens_hooks(model, start_ix=start_ix, end_ix=end_ix, layer_names=layer_names, decoder_layer_names=decoder_layer_names, verbose=verbose)
+    make_lens_hooks(model, start_ix=start_ix, end_ix=end_ix, layer_names=layer_names, decoder_layer_names=decoder_layer_names, verbose=verbose)
+    # Tokenize inputs with padding control
+    input_ids = text_to_input_ids(tokenizer, inputs, model, pad_to_max_length=pad_to_max_length)
 
-        # Collect logits from the model
-        layer_logits, layer_names = collect_logits(model, input_ids, layer_names, decoder_layer_names)
-        layer_logits = safe_cast_logits(torch.tensor(layer_logits)).numpy()
-        # Process logits to get top-k predictions and probabilities
-        layer_preds, layer_probs, _ = postprocess_logits_tokp(layer_logits, top_n=topk)
+    # Collect logits from the model
+    layer_logits, layer_names = collect_logits(model, input_ids, layer_names, decoder_layer_names)
+    layer_logits = safe_cast_logits(torch.tensor(layer_logits)).numpy()
+    # Process logits to get top-k predictions and probabilities
+    layer_preds, layer_probs, _ = postprocess_logits_tokp(layer_logits, top_n=topk)
 
-        # Clean up probabilities before sorting
-        layer_probs = np.nan_to_num(layer_probs, nan=1e-10, posinf=1.0, neginf=0.0)
+    # Clean up probabilities before sorting
+    layer_probs = np.nan_to_num(layer_probs, nan=1e-10, posinf=1.0, neginf=0.0)
 
-        # Compute top-k indices and scores from cleaned probs
-        topk_indices = np.argsort(layer_probs, axis=-1)[..., -topk:][..., ::-1]
-        topk_scores = np.take_along_axis(layer_probs, topk_indices, axis=-1)
+    # Compute top-k indices and scores from cleaned probs
+    topk_indices = np.argsort(layer_probs, axis=-1)[..., -topk:][..., ::-1]
+    topk_scores = np.take_along_axis(layer_probs, topk_indices, axis=-1)
 
-        # Entropy (mean over top-k only)
-        if entropy:
-            map_color = 'RdBu_r'
-            if topk_mean:
-                clipped_probs = np.take_along_axis(layer_probs, topk_indices, axis=-1)
-                log_probs = np.log(np.clip(clipped_probs, 1e-10, 1.0))
-                value_matrix = -np.sum(clipped_probs * log_probs, axis=-1)
-            else:
-                value_matrix = compute_entropy(layer_probs)
-            metric_type = 'entropy'
-            title = f"Entropy ({'mean topk' if topk_mean else 'full dist'})"
-
-        # Probabilities
-        elif probs:
-            map_color = 'Blues'
-            if topk_mean:
-                value_matrix = topk_scores.mean(axis=-1)
-            else:
-                value_matrix = np.take_along_axis(layer_probs, layer_preds[..., None], axis=-1).squeeze(-1)
-            metric_type = 'probs'
-            title = f"Probabilities ({'mean topk' if topk_mean else 'top-1'})"
-
-        # KL-Divergence block
-        elif kl:  # Ensure we’re in the KL Divergence block
-            map_color = 'Cividis'
-
-            if topk_mean:
-                # Clip and normalize
-                clipped_probs = np.take_along_axis(layer_probs, topk_indices, axis=-1)  # (L, T, K)
-                log_probs = np.log(np.clip(clipped_probs, 1e-10, 1.0))
-                q_probs = np.exp(log_probs)  # Just to be safe: ensure proper probs (though they already are)
-
-                # Scatter q_probs into full vocab-size tensor
-                q_full_probs = np.zeros_like(layer_probs)
-                for k in range(topk_indices.shape[-1]):
-                    np.put_along_axis(
-                        q_full_probs,
-                        topk_indices[:, :, k:k+1],
-                        q_probs[:, :, k:k+1],
-                        axis=-1
-                    )
-
-                # Compute KL divergence between full probs and top-k projected
-                value_matrix = kl_div(layer_probs, q_full_probs)
-            
-            else:
-                # Just compare full predicted distribution to one-hot of top-1 pred
-                pred_probs = np.take_along_axis(layer_probs, layer_preds[..., None], axis=-1)
-                pred_probs_full = np.zeros_like(layer_probs)
-                np.put_along_axis(pred_probs_full, layer_preds[..., None], pred_probs, axis=-1)
-                value_matrix = kl_div(layer_probs, pred_probs_full)
-
-            metric_type = 'kl'
-            title = f"KL Divergence ({'mean topk' if topk_mean else 'top-1'})"
-
-        # Ranks
-        elif ranks:
-            map_color = 'Blues'
-
-            # ── Raw rank matrix ────────────────────────────────────
-            if topk_mean:
-                # Get ranks for top-k tokens and average over them
-                topk_probs = np.take_along_axis(layer_probs, topk_indices, axis=-1)  # shape (L, T, k)
-                ranks_matrix = (layer_probs[..., None] >= topk_probs[:, :, None, :]).sum(axis=-2)  # (L, T, k)
-                value_matrix = ranks_matrix.mean(axis=-1)  # Average over top-k (L, T)
-            else:
-                pred_probs = np.take_along_axis(layer_probs, layer_preds[..., None], axis=-1)  # shape (L, T, 1)
-                value_matrix = (layer_probs >= pred_probs).sum(axis=-1)  # Compare and sum (L, T)
-
-            # Calculate ranks based on probabilities, sorting in descending order
-            rank_matrix_raw = np.argsort(-layer_probs, axis=-1)  # (L, T, Vocab)
-
-            # Now we need to calculate the rank of the true predicted token for each layer/token
-            # For each token, find its position in the sorted list of probabilities
-            pred_ranks = np.take_along_axis(rank_matrix_raw, layer_preds[..., None], axis=-1).squeeze(-1) + 1  # +1 to make rank start from 1
-
-            metric_type = "ranks"
-            title = f"Prediction Rank ({'mean topk' if topk_mean else 'top-1'})"
-
-        # Logits
+    # Entropy (mean over top-k only)
+    if entropy:
+        map_color = 'RdBu_r'
+        if topk_mean:
+            clipped_probs = np.take_along_axis(layer_probs, topk_indices, axis=-1)
+            log_probs = np.log(np.clip(clipped_probs, 1e-10, 1.0))
+            value_matrix = -np.sum(clipped_probs * log_probs, axis=-1)
         else:
-            map_color = 'thermal'
-            topk_logits = np.take_along_axis(layer_logits, topk_indices, axis=-1)
-            if topk_mean:
-                value_matrix = topk_logits.mean(axis=-1)
-            else:
-                value_matrix = np.take_along_axis(layer_logits, layer_preds[..., None], axis=-1).squeeze(-1)
-            metric_type = 'logits'
-            title = f"Logits ({'mean topk' if topk_mean else 'top-1'})"
+            value_matrix = compute_entropy(layer_probs)
+        metric_type = 'entropy'
+        title = f"Entropy ({'mean topk' if topk_mean else 'full dist'})"
 
+    # Probabilities
+    elif probs:
+        map_color = 'Blues'
+        if topk_mean:
+            value_matrix = topk_scores.mean(axis=-1)
+        else:
+            value_matrix = np.take_along_axis(layer_probs, layer_preds[..., None], axis=-1).squeeze(-1)
+        metric_type = 'probs'
+        title = f"Probabilities ({'mean topk' if topk_mean else 'top-1'})"
+
+    # KL-Divergence block
+    elif kl:  # Ensure we’re in the KL Divergence block
+        map_color = 'Cividis'
+
+        if topk_mean:
+            # Clip and normalize
+            clipped_probs = np.take_along_axis(layer_probs, topk_indices, axis=-1)  # (L, T, K)
+            log_probs = np.log(np.clip(clipped_probs, 1e-10, 1.0))
+            q_probs = np.exp(log_probs)  # Just to be safe: ensure proper probs (though they already are)
+
+            # Scatter q_probs into full vocab-size tensor
+            q_full_probs = np.zeros_like(layer_probs)
+            for k in range(topk_indices.shape[-1]):
+                np.put_along_axis(
+                    q_full_probs,
+                    topk_indices[:, :, k:k+1],
+                    q_probs[:, :, k:k+1],
+                    axis=-1
+                )
+
+            # Compute KL divergence between full probs and top-k projected
+            value_matrix = kl_div(layer_probs, q_full_probs)
+        
+        else:
+            # Just compare full predicted distribution to one-hot of top-1 pred
+            pred_probs = np.take_along_axis(layer_probs, layer_preds[..., None], axis=-1)
+            pred_probs_full = np.zeros_like(layer_probs)
+            np.put_along_axis(pred_probs_full, layer_preds[..., None], pred_probs, axis=-1)
+            value_matrix = kl_div(layer_probs, pred_probs_full)
+
+        metric_type = 'kl'
+        title = f"KL Divergence ({'mean topk' if topk_mean else 'top-1'})"
+
+    # Ranks
+    elif ranks:
+        map_color = 'Blues'
+
+        # ── Raw rank matrix ────────────────────────────────────
+        if topk_mean:
+            # Get ranks for top-k tokens and average over them
+            topk_probs = np.take_along_axis(layer_probs, topk_indices, axis=-1)  # shape (L, T, k)
+            ranks_matrix = (layer_probs[..., None] >= topk_probs[:, :, None, :]).sum(axis=-2)  # (L, T, k)
+            value_matrix = ranks_matrix.mean(axis=-1)  # Average over top-k (L, T)
+        else:
+            pred_probs = np.take_along_axis(layer_probs, layer_preds[..., None], axis=-1)  # shape (L, T, 1)
+            value_matrix = (layer_probs >= pred_probs).sum(axis=-1)  # Compare and sum (L, T)
+
+        # Calculate ranks based on probabilities, sorting in descending order
+        rank_matrix_raw = np.argsort(-layer_probs, axis=-1)  # (L, T, Vocab)
+
+        # Now we need to calculate the rank of the true predicted token for each layer/token
+        # For each token, find its position in the sorted list of probabilities
+        pred_ranks = np.take_along_axis(rank_matrix_raw, layer_preds[..., None], axis=-1).squeeze(-1) + 1  # +1 to make rank start from 1
+
+        metric_type = "ranks"
+        title = f"Prediction Rank ({'mean topk' if topk_mean else 'top-1'})"
+
+    # Logits
     else:
-        # Collect metrics if needed
-        if json_log_path is not None:
-            metrics = collect_logit_lens_metrics_batch(
-                model, tokenizer, prompts=inputs, start_ix=start_ix, end_ix=end_ix, topk=topk, prompt_type="text", max_prompts=50
-            )
-            if json_log_path:
-                save_metrics_to_json(metrics, json_log_path)
+        map_color = 'thermal'
+        topk_logits = np.take_along_axis(layer_logits, topk_indices, axis=-1)
+        if topk_mean:
+            value_matrix = topk_logits.mean(axis=-1)
+        else:
+            value_matrix = np.take_along_axis(layer_logits, layer_preds[..., None], axis=-1).squeeze(-1)
+        metric_type = 'logits'
+        title = f"Logits ({'mean topk' if topk_mean else 'top-1'})"
 
-    # Plot logit lens if requested
-    if plot_topk_lens:
-        _plot_logit_lens_plotly(
-            layer_logits=layer_logits,
-            layer_preds=layer_preds,
-            layer_probs=layer_probs,
-            topk_scores=topk_scores,
-            topk_indices=topk_indices,
-            tokenizer=tokenizer,
-            input_ids=input_ids,
-            start_ix=start_ix,
-            layer_names=layer_names,
-            top_k=topk,
-            topk_mean=topk_mean,
-            normalize=True,
-            metric_type=metric_type,
-            map_color=map_color,
-            value_matrix=value_matrix,
-            rank_matrix_raw=rank_matrix_raw,
-            pred_ranks=pred_ranks,  
-            title=title,
-            block_step=block_step,
-            token_font_size=token_font_size
-        )
+
+    _plot_quant_lens_plotly(
+        layer_logits=layer_logits,
+        layer_preds=layer_preds,
+        layer_probs=layer_probs,
+        topk_scores=topk_scores,
+        topk_indices=topk_indices,
+        tokenizer=tokenizer,
+        input_ids=input_ids,
+        start_ix=start_ix,
+        layer_names=layer_names,
+        top_k=topk,
+        topk_mean=topk_mean,
+        normalize=True,
+        metric_type=metric_type,
+        map_color=map_color,
+        value_matrix=value_matrix,
+        rank_matrix_raw=rank_matrix_raw,
+        pred_ranks=pred_ranks,  
+        title=title,
+        block_step=block_step,
+        token_font_size=token_font_size
+    )
 
     # Clean up GPU memory to avoid memory overflow after operations
     clear_cuda_cache()
