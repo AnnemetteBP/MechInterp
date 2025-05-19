@@ -17,3 +17,5 @@ einops
 plotly
 
 datasets[vision]
+
+langdetect

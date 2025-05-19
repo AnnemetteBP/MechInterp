@@ -46,7 +46,7 @@ class BitLinear(nn.Module):
         # Register buffers for ternary quantized weights and alpha
         self.register_buffer('ternary_weight', torch.zeros_like(orig.weight))
         self.register_buffer('alpha', torch.tensor(0.0))
-        self.register_buffer('tau', torch.tensor(0.0))
+        #self.register_buffer('tau', torch.tensor(0.0))
 
         if self.has_bias:
             self.bias = nn.Parameter(orig.bias.data.clone())
@@ -59,7 +59,8 @@ class BitLinear(nn.Module):
 
         self.act_scale_initialized = self.act_scale is not None
 
-    def quantize_ternary(self:BitLinear, tensor:torch.Tensor, eps:float = 1e-8, deterministic:bool=True) -> Tuple[torch.Tensor, float]:
+
+    def quantize_ternary(self:BitLinear, tensor:torch.Tensor, eps:float=1e-8, deterministic:bool=True) -> Tuple[torch.Tensor, float]:
         """
         Perform ternary quantization on a tensor: quantize tensor values to {-1, 0, 1}.
         """
@@ -69,6 +70,7 @@ class BitLinear(nn.Module):
         print(f"[DEBUG] Quantized: {quantized}| ")
         packed_ternary = (quantized + 1).to(torch.uint8)  # Convert {-1, 0, 1} to {0, 1, 2} (uint8)
         return packed_ternary, gamma.item()
+
 
     def quantize(self:BitLinear, weight:Optional[torch.Tensor]=None) -> None:
         """
@@ -91,6 +93,7 @@ class BitLinear(nn.Module):
         # Cache dequantized weights for forward()
         self.dequantized_weight = self.dequantize()
 
+
     def dequantize(self:BitLinear) -> torch.Tensor:
         """
         Dequantizes ternary weights (maps {0, 1, 2} back to {-1, 0, 1}).
@@ -98,7 +101,8 @@ class BitLinear(nn.Module):
         dequantized = self.ternary_weight.float() - 1  # Map {0, 1, 2} back to {-1, 0, 1}
         return dequantized
 
-    def dequantize_activation(self: BitLinear, act_int8: torch.Tensor) -> torch.Tensor:
+
+    def dequantize_activation(self:BitLinear, act_int8:torch.Tensor) -> torch.Tensor:
         """
         Dequantizes an activation tensor from int8 back to floating-point.
         """
@@ -125,6 +129,7 @@ class BitLinear(nn.Module):
             input_dequant = input_int.float() * scale
             input_dequant = torch.nan_to_num(input_dequant, nan=0.0, posinf=1e4, neginf=-1e4)
             return input_dequant
+
 
     def calibrate_activation(self:BitLinear, input:torch.Tensor, act_bits:int=8, force:bool=False, percentile:float=0.999) -> None:
         """
@@ -153,6 +158,7 @@ class BitLinear(nn.Module):
         self.act_scale_initialized = True
         print(f"[Calibration] {self.name} | Max Activation: {max_val.item():.5f} | Scale: {scale:.8f}")
 
+
     def freeze_quantization(self:BitLinear) -> None:
         """
         Freezes quantization by disabling debug mode.
@@ -160,6 +166,7 @@ class BitLinear(nn.Module):
         self.debug = False
         if self.act_quant and not self.act_scale_initialized:
             raise RuntimeError(f"Activation scale for {self.name} not calibrated yet!")
+
 
     def forward(self:BitLinear, input:torch.Tensor) -> torch.Tensor:
         """
@@ -183,6 +190,7 @@ class BitLinear(nn.Module):
 
         return F.linear(input, weight, bias)
 
+
     def pack_ternary_to_bytes(self:BitLinear, ternary:torch.Tensor) -> torch.ByteTensor:
         """
         Packs ternary values in {0, 1, 2} (as uint8) into bytes (4 values per byte).
@@ -202,6 +210,7 @@ class BitLinear(nn.Module):
         )
         return packed
 
+
     def unpack_bytes_to_ternary(self:BitLinear, packed:torch.ByteTensor, original_shape:torch.Size) -> torch.Tensor:
         """
         Unpacks bytes to ternary values in {0, 1, 2}.
@@ -213,6 +222,7 @@ class BitLinear(nn.Module):
         unpacked[2::4] = (packed >> 2) & 0b11
         unpacked[3::4] = packed & 0b11
         return unpacked[:torch.prod(torch.tensor(original_shape))].view(original_shape)
+
 
     def plot_activation(self:BitLinear, input:torch.Tensor, input_dequant:torch.Tensor):
         """ Optional visualization for debugging quantization quality """

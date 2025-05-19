@@ -28,12 +28,15 @@ def save_metrics_to_json(metrics:Dict, save_path:str) -> None:
 
     def convert_ndarray(o):
         if isinstance(o, np.ndarray):
-            return o.tolist()  # Convert ndarray to a list
+            return o.tolist()
+        elif isinstance(o, (np.float32, np.float64, np.int32, np.int64)):
+            return o.item()  # Convert NumPy scalar to Python scalar
         elif isinstance(o, dict):
-            return {k: convert_ndarray(v) for k, v in o.items()}  # Recursively convert dict
+            return {k: convert_ndarray(v) for k, v in o.items()}
         elif isinstance(o, list):
-            return [convert_ndarray(i) for i in o]  # Recursively convert list
-        return o  # Return other objects as is
+            return [convert_ndarray(i) for i in o]
+        return o
+
 
     # Convert the entire metrics dictionary to a JSON serializable format
     serializable_metrics = convert_ndarray(metrics)
@@ -180,7 +183,7 @@ def collect_logits(model, input_ids, layer_names, decoder_layer_names) -> Tuple:
 
 
 # ===================== Probs and logits for topk > 1 and for topk plot ============================
-def postprocess_logits_tokp(layer_logits: Any, normalize_probs=False, top_n:int=5, return_scores:bool=True) -> Tuple[Any, Any, Any]:
+def postprocess_logits_topk(layer_logits:Any, normalize_probs=False, top_n:int=5, return_scores:bool=True) -> Tuple[Any, Any, Any]:
 
     if layer_logits.dtype == np.float16:
         layer_logits = layer_logits.astype(np.float32)
@@ -227,6 +230,26 @@ def calculate_avg_stability(stability_top1, stability_topk) -> Tuple[Any, Any]:
     avg_stability_topk = np.mean(stability_topk[stability_topk != -1])  # Average stability for top-k predictions
 
     return avg_stability_top1, avg_stability_topk
+
+def compute_safe_stability_metrics(layer_preds, topk_indices, target_ids) -> Tuple:
+    """
+    Compute the stability metrics excluding layer 0 (embedding/projection layer).
+    """
+    # Slice off layer 0
+    layer_preds = layer_preds[1:]  # [layers-1, tokens]
+    topk_indices = topk_indices[1:]  # [layers-1, tokens, topk]
+    
+    # Top-1 Stability
+    match_top1 = layer_preds == target_ids
+    has_match_top1 = np.any(match_top1, axis=0)
+    stability_top1 = np.where(has_match_top1, np.argmax(match_top1, axis=0) + 1, -1)
+
+    # Top-k Stability
+    match_topk = np.any(topk_indices == target_ids[None, :, None], axis=-1)
+    has_match_topk = np.any(match_topk, axis=0)
+    stability_topk = np.where(has_match_topk, np.argmax(match_topk, axis=0) + 1, -1)
+
+    return stability_top1, stability_topk
 
 
 def compute_stability_metrics(layer_preds, topk_indices, target_ids) -> Tuple:
@@ -387,7 +410,7 @@ def collect_logit_lens_metrics_batch(
             layer_logits = layer_logits[:, start_ix + 1:end_ix + 1, :]
 
             # Top-k prediction postprocessing
-            layer_preds, layer_probs, _ = postprocess_logits_tokp(layer_logits, top_n=topk)
+            layer_preds, layer_probs, _ = postprocess_logits_topk(layer_logits, top_n=topk)
             topk_indices = np.argsort(layer_probs, axis=-1)[..., -topk:][..., ::-1]
 
             # Ground truth target token IDs
@@ -720,7 +743,7 @@ def plot_topk_logit_lens(
         )
 
         # Register hooks
-        #hook_handles = make_lens_hooks(model, start_ix=start_ix, end_ix=end_ix, layer_names=layer_names, decoder_layer_names=decoder_layer_names, verbose=verbose)
+        hook_handles = make_lens_hooks(model, start_ix=start_ix, end_ix=end_ix, layer_names=layer_names, decoder_layer_names=decoder_layer_names, verbose=verbose)
         make_lens_hooks(model, start_ix=start_ix, end_ix=end_ix, layer_names=layer_names, decoder_layer_names=decoder_layer_names, verbose=verbose)
         # Tokenize inputs with padding control
         input_ids = text_to_input_ids(tokenizer, inputs, model, pad_to_max_length=pad_to_max_length)
@@ -729,7 +752,7 @@ def plot_topk_logit_lens(
         layer_logits, layer_names = collect_logits(model, input_ids, layer_names, decoder_layer_names)
         layer_logits = safe_cast_logits(torch.tensor(layer_logits)).numpy()
         # Process logits to get top-k predictions and probabilities
-        layer_preds, layer_probs, _ = postprocess_logits_tokp(layer_logits, top_n=topk)
+        layer_preds, layer_probs, _ = postprocess_logits_topk(layer_logits, top_n=topk)
 
         # Clean up probabilities before sorting
         layer_probs = np.nan_to_num(layer_probs, nan=1e-10, posinf=1.0, neginf=0.0)
@@ -834,8 +857,7 @@ def plot_topk_logit_lens(
             metrics = collect_logit_lens_metrics_batch(
                 model, tokenizer, prompts=inputs, start_ix=start_ix, end_ix=end_ix, topk=topk, prompt_type="text", max_prompts=50
             )
-            if json_log_path:
-                save_metrics_to_json(metrics, json_log_path)
+        save_metrics_to_json(metrics, json_log_path)
 
     # Plot logit lens if requested
     if plot_topk_lens:

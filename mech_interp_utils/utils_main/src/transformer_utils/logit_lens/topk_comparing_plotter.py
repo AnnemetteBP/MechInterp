@@ -88,7 +88,7 @@ def collect_logits(model, input_ids, layer_names, decoder_layer_names):
 
 
 # ===================== Probs and logits for topk > 1 and for topk plot ============================
-def postprocess_logits_tokp(layer_logits: Any, normalize_probs=False, top_n: int = 5, return_scores: bool = True) -> Tuple[Any, Any, Any]:
+def postprocess_logits_topk(layer_logits: Any, normalize_probs=False, top_n:int=5, return_scores:bool=True) -> Tuple[Any, Any, Any]:
 
     if layer_logits.dtype == np.float16:
         layer_logits = layer_logits.astype(np.float32)
@@ -467,8 +467,8 @@ def plot_topk_comparing_lens(
     layer_logits_1 = safe_cast_logits(torch.tensor(layer_logits_1)).numpy()
     layer_logits_2 = safe_cast_logits(torch.tensor(layer_logits_2)).numpy()
     # Get predictions/probabilities
-    layer_preds_1, layer_probs_1, _ = postprocess_logits_tokp(layer_logits_1, top_n=topk)
-    layer_preds_2, layer_probs_2, _ = postprocess_logits_tokp(layer_logits_2, top_n=topk)
+    layer_preds_1, layer_probs_1, _ = postprocess_logits_topk(layer_logits_1, top_n=topk)
+    layer_preds_2, layer_probs_2, _ = postprocess_logits_topk(layer_logits_2, top_n=topk)
 
     # Clean up NaNs/Infs
     layer_probs_1 = np.nan_to_num(layer_probs_1, nan=1e-10, posinf=1.0, neginf=0.0)

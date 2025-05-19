@@ -101,7 +101,7 @@ def applyPTQ(
         calibration_input:Optional[str|None],
         mode:str='1.58bit',
         safer_quant:bool=True,
-        q_safety_layers:Optional[List[str]|None]=['embed_tokens', 'lm_head', 'norm', 'layernorm'] ,
+        q_safety_layers:Optional[List[str]|None]=['embed_tokens', 'lm_head', 'norm', 'layernorm'],
         model_half:bool=False,
         quant_half:bool=False,
         layers_to_quant_weights:Optional[List[str]]|None=['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj'],
@@ -158,7 +158,7 @@ def applyPTQ(
 
         if safer_quant:
             q_layers = q_safety_layers
-            if any(skip in name for skip in q_layers): # no impact 'lm_head' for 7B+: https://medium.com/@NeuralCompressor/10-tips-for-quantizing-llms-and-vlms-with-autoround-923e733879a7#:~:text=However%2C%20quantizing%20the%20LM%2Dhead,provides%20a%20reasonable%20compression%20rate.
+            if any(skip in name for skip in q_layers): 
                 #quantize_weights = False
                 quantize_weights = True if layers_to_quant_weights == ["*"] else any(layer in name for layer in layers_to_quant_weights)
                 quantize_activations = True if layers_to_quant_activations == ["*"] else any(layer in name for layer in layers_to_quant_activations)
