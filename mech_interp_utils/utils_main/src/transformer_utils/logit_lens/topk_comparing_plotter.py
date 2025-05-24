@@ -234,7 +234,8 @@ def _plot_logit_lens_plotly(
     value_matrix=None,
     title:str|None=None,
     block_step:int=1,
-    token_font_size:int=12
+    token_font_size:int=12,
+    label_font_size:int=20,
 ):
     
     num_layers, num_tokens, vocab_size = layer_logits.shape
@@ -354,7 +355,7 @@ def _plot_logit_lens_plotly(
     ))
 
     fig.update_layout(
-        font=dict(family="DejaVu Sans", size=14),
+        font=dict(family="DejaVu Sans", size=label_font_size),
         xaxis=dict(
             tickmode='array',
             tickvals=list(range(num_tokens)),
@@ -402,6 +403,7 @@ def plot_topk_comparing_lens(
     js:bool=False,
     block_step:int=1,
     token_font_size:int=12,
+    label_font_size:int=20,
     include_input:bool=True,
     force_include_output:bool=True,
     include_subblocks:bool=False,
@@ -542,7 +544,8 @@ def plot_topk_comparing_lens(
         value_matrix=value_matrix,
         title=title,
         block_step=block_step,
-        token_font_size=token_font_size
+        token_font_size=token_font_size,
+        label_font_size=label_font_size
     )
 
     clear_cuda_cache()

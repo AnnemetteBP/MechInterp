@@ -499,7 +499,8 @@ def _plot_logit_lens_plotly(
     pred_ranks:Optional[Any|None]=None,    
     title:str|None=None,
     block_step:int=1,
-    token_font_size:int=12
+    token_font_size:int=12,
+    label_font_size:int=20,
 ) -> None:
     num_layers, num_tokens, vocab_size = layer_logits.shape
     end_ix = start_ix + num_tokens
@@ -582,6 +583,7 @@ def _plot_logit_lens_plotly(
             # Apply log scale and normalization to the value matrix for proper coloring
             value_matrix = np.log10(pred_ranks)  # Use log scale for ranks
             value_matrix = min_max_scale(value_matrix, 0, 1)  # Scale to [0, 1] for proper coloring
+
         else:
             value_matrix = min_max_scale(value_matrix, 0, 1)
 
@@ -655,7 +657,7 @@ def _plot_logit_lens_plotly(
     ))
 
     fig.update_layout(
-        font=dict(family="DejaVu Sans", size=14), # or 'Noto Sans'
+        font=dict(family="DejaVu Sans", size=label_font_size), # or 'Noto Sans'
         xaxis=dict(
             tickmode='array',
             tickvals=list(range(num_tokens)),
@@ -708,6 +710,7 @@ def plot_topk_logit_lens(
     ranks:bool=False,
     block_step:int=1,
     token_font_size:int=12,
+    label_font_size:int=20,
     include_input:bool=True,
     force_include_output:bool=True,
     include_subblocks:bool=False,
@@ -881,7 +884,8 @@ def plot_topk_logit_lens(
             pred_ranks=pred_ranks,  
             title=title,
             block_step=block_step,
-            token_font_size=token_font_size
+            token_font_size=token_font_size,
+            label_font_size=label_font_size
         )
 
     # Clean up GPU memory to avoid memory overflow after operations
