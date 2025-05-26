@@ -412,6 +412,52 @@ def plot_topk_comparing_lens(
     verbose:bool=False,
     pad_to_max_length:bool=False
 ):
+    """
+    Draws "comparing logit lens" plots, and generalizations thereof.
+
+    For background, see
+        https://www.lesswrong.com/posts/AcKRB8wDpdaN6v6ru/interpreting-gpt-the-logit-lens
+        https://jalammar.github.io/hidden-states/
+        nostalgebraist plotting tool: https://github.com/nostalgebraist/transformer-utils
+
+    `model`, `tokenizer` and `input_ids` should be familiar from the transformers library.  Other args are
+     documented below.
+
+    `model` should be a `transformers.PreTrainedModel` with an `lm_head`, e.g. `AutoModelForCausalLM`. This implementation works for LLaMAs, OLMos
+
+    Note that using `start_ix` and `end_ix` is not equivalent to passed an `input_ids` sliced like `input_ids[start_ix:end_ix]`.  The LM will see the entire input you pass in as `input_ids`, no matter how you set `start_ix` and `end_ix`.  These "ix" arguments only control what is _displayed_.
+
+    The boolean arguments `js`. The options are:
+
+        - Logits (the default plot type, if `js` is False):
+            - cell color: NWD between two model's topk-1 or mean topk-n probability distributions for next token preds. Clipped to range [0,1]
+            - cell text:  top-1 token prediction at each layer and hover to show topk-n token preds
+
+        - JS:
+            - cell color: JS divergence between two model's topk-1 or mean topk-n probability distributions for next token preds. Clipped to range [0,1]
+            - cell text:  top-1 token prediction at each layer and hover to show topk-n token preds
+        
+
+    `include_subblocks` and `decoder_layer_names` allow the creation of plots that go beyond what was done
+    in the original blog post.  See below for details
+
+    Arguments:
+
+        nwd:
+            draw a "nwd" plot
+            draw a "js" plot (overrides `nwd`)
+        block_step:
+            stride when choosing blocks to plot, e.g. block_step=2 skips every other block
+        decoder_layer_names:
+            defines the subset of the model used to "decode" hidden states.
+
+            The default value `['final_layernorm', 'lm_head']` corresponds to the ordinary "logit lens," where
+            we decode each layer's output as though it were the output of the final block.
+
+            Prepending one or more of the last layers of the model, e.g. `['h11', 'final_layernorm', 'lm_head']` for GPT2, LLaMA: ['norm', 'lm_head']
+            for a 12-layer model, will treat these layers as part of the decoder.  In the general case, this is equivalent
+            to dropping different subsets of interior layers and watching how the output varies.
+    """
     
     metric_type = None
 
