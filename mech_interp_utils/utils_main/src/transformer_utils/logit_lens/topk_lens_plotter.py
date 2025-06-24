@@ -8,16 +8,53 @@ import numpy as np
 import scipy.special
 from scipy.stats import wasserstein_distance
 from scipy.special import kl_div
+
+from scipy.spatial.distance import cosine
+from scipy.special import rel_entr
+
 import seaborn as sns
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import colorcet  # noqa
+from tqdm import tqdm
+from langdetect import detect, DetectorFactory
 import plotly.graph_objects as go
 from ..util.python_utils import make_print_if_verbose
 
 from .hooks import make_lens_hooks
 from .layer_names import make_layer_names
 
+
+DetectorFactory.seed = 0  # for reproducibility
+
+# Build token -> language map
+def build_token_language_map(tokenizer):
+    token_lang_map = {}
+    for token_id in tqdm(range(tokenizer.vocab_size)):
+        token_str = tokenizer.decode([token_id])
+        try:
+            lang = detect(token_str)
+        except:
+            lang = "unknown"
+        token_lang_map[token_id] = lang
+    return token_lang_map
+
+def compute_language_coverage(topk_indices, token_lang_map, target_languages=None):
+    lang_coverage_per_layer = []
+    for i in range(len(topk_indices)):
+        lang_counts = {}
+        for j in range(topk_indices.shape[1]):
+            for k in range(topk_indices.shape[2]):
+                token_id = topk_indices[i, j, k]
+                lang = token_lang_map.get(token_id, "unknown")
+                lang_counts[lang] = lang_counts.get(lang, 0) + 1
+        # Compute coverage
+        total = sum(lang_counts.values())
+        if target_languages is None:
+            target_languages = list(lang_counts.keys())
+        lang_coverage = {lang: lang_counts.get(lang, 0) / total for lang in target_languages}
+        lang_coverage_per_layer.append(lang_coverage)
+    return lang_coverage_per_layer
 
 # ===================== Misc ============================
 def clear_cuda_cache() -> None:
@@ -338,7 +375,7 @@ def compute_entropy(probs):
     return -np.sum(probs * log_probs, axis=-1)
 
 def maybe_batchify(p):
-    """ Normalize shape for e.g., wasserstein """
+    """ Normalize shape """
     if p.ndim == 2:
         p = np.expand_dims(p, 0)
     return p
@@ -358,6 +395,47 @@ def compute_wasserstein_from_json(file_a, file_b, key="logit_mean"):
         m1 = json.load(f1)[key]
         m2 = json.load(f2)[key]
     return wasserstein_distance(m1, m2)
+
+
+def compute_cosine_similarity_across_layers(layer_probs):
+    cosine_sims = []
+    for i in range(len(layer_probs)-1):
+        sims_per_token = []
+        for j in range(layer_probs.shape[1]):  # token positions
+            p1 = layer_probs[i, j]
+            p2 = layer_probs[i+1, j]
+            sim = 1 - cosine(p1, p2)
+            sims_per_token.append(sim)
+        cosine_sims.append(np.mean(sims_per_token))
+    return cosine_sims
+
+def compute_kl_vs_previous_layer(layer_probs):
+    kl_per_layer = []
+    for i in range(len(layer_probs)-1):
+        kl_tokens = []
+        for j in range(layer_probs.shape[1]):  # token positions
+            p1 = np.clip(layer_probs[i, j], 1e-10, 1.0)
+            p2 = np.clip(layer_probs[i+1, j], 1e-10, 1.0)
+            kl = np.sum(rel_entr(p1, p2))
+            kl_tokens.append(kl)
+        kl_per_layer.append(np.mean(kl_tokens))
+    return kl_per_layer
+
+def compute_token_variety(topk_indices):
+    unique_tokens_per_layer = []
+    for i in range(len(topk_indices)):
+        unique_tokens = np.unique(topk_indices[i])
+        unique_tokens_per_layer.append(len(unique_tokens))
+    return unique_tokens_per_layer
+
+def expand_metric_for_heatmap(metric_values, num_tokens):
+    return np.repeat(np.expand_dims(np.array(metric_values), axis=1), num_tokens, axis=1)
+
+
+def expand_transition_metric_for_heatmap(metric_values, num_layers, num_tokens):
+    # Pad with one value (e.g. repeat first or last value) to make it num_layers long
+    padded_metric_values = np.concatenate([[metric_values[0]], metric_values])
+    return np.repeat(np.expand_dims(np.array(padded_metric_values), axis=1), num_tokens, axis=1)
 
 
 # ===================== Topk-N Analysis ============================
@@ -557,6 +635,12 @@ def _plot_logit_lens_plotly(
                     hover_val = f"<b>Logit:</b> {raw_val:.3f}<br>"
                 elif metric_type == "kl":
                     hover_val = f"<b>KL Divergence:</b> {raw_val:.3f}<br>"
+                elif metric_type == "cos_sims":
+                    hover_val = f"<b>Cosine Similarity:</b> {raw_val:.3f}<br>"
+                elif metric_type == "lw_kl":
+                    hover_val = f"<b>LW KL Div:</b> {raw_val:.3f}<br>"
+                elif metric_type == "tok_var":
+                    hover_val = f"<b>Token Variety:</b> {raw_val:.3f}<br>"
                 elif metric_type == "ranks":
                     hover_val = f"<b>Rank:</b> {raw_val}<br>"
                 else:
@@ -704,9 +788,13 @@ def plot_topk_logit_lens(
     topk_mean:bool=True,
     save_fig_path:str|None=None,
     json_log_path:str|None=None,
+    lang_detect:str|None=None,
     probs:bool=False,
     entropy:bool=False,
     kl:bool=False,
+    cosine_sims:bool=False,
+    kl_layerwise:bool=False,
+    token_variety:bool=False,
     ranks:bool=False,
     block_step:int=1,
     token_font_size:int=12,
@@ -735,7 +823,7 @@ def plot_topk_logit_lens(
 
     Note that using `start_ix` and `end_ix` is not equivalent to passed an `input_ids` sliced like `input_ids[start_ix:end_ix]`.  The LM will see the entire input you pass in as `input_ids`, no matter how you set `start_ix` and `end_ix`.  These "ix" arguments only control what is _displayed_.
 
-    The boolean arguments `probs`, `ranks`, `entropy` and `kl` control the type of plot.  The options are:
+    The boolean arguments `probs`, `ranks`, `entropy`, `kl` `cosine_sims`, `kl_layerwise` and `token_variety` control the type of plot.  The options are:
 
         - Logits (the default plot type, if `probs`, `ranks` and `kl` are all False):
             - cell color: logit assigned by each layer to the final layer's top-1 token prediction
@@ -755,7 +843,19 @@ def plot_topk_logit_lens(
 
         - KL:
             - cell color: KL divergence of each layer's probability distribtion w/r/t the final layer's
-            - cell text:  same as cell color
+            - cell text:  top-1 token prediction at each layer
+
+        - Cosine Similarities:
+            - cell color: Cosine similarity in topk predictions
+            - cell text:  top-1 token prediction at each layer
+
+        - Layer-wise KL:
+            - cell color: KL divergence w/r/t layer
+            - cell text:  top-1 token prediction at each layer
+
+        - Token Variety:
+            - cell color: Token variety in topk predictions
+            - cell text:  top-1 token prediction at each layer
 
     `include_subblocks` and `decoder_layer_names` allow the creation of plots that go beyond what was done
     in the original blog post.  See below for details
@@ -770,6 +870,12 @@ def plot_topk_logit_lens(
             draw a "KL" plot (overrides `probs`, `ranks`)
         entropy:
             draw a "Entropy" plot (overrides `probs`, `ranks`, `kl`)
+        cosine_sims:
+            draw a "Cosine Similarity" plot (overrides `probs`, `ranks`, `kl`, `entropy`)
+        layerwise_kl:
+            draw a "Layer-wise KL" plot (overrides `probs`, `ranks`, `kl`, `entropy`, `cosine_sims`)
+        token_variety:
+            draw a "Token Variety" plot (overrides `probs`, `ranks`, `kl`, `entropy`, `cosine_sims`, `layerwise_kl`)
         block_step:
             stride when choosing blocks to plot, e.g. block_step=2 skips every other block
         include_input:
@@ -815,7 +921,7 @@ def plot_topk_logit_lens(
         )
 
         # Register hooks
-        hook_handles = make_lens_hooks(model, start_ix=start_ix, end_ix=end_ix, layer_names=layer_names, decoder_layer_names=decoder_layer_names, verbose=verbose)
+        #hook_handles = make_lens_hooks(model, start_ix=start_ix, end_ix=end_ix, layer_names=layer_names, decoder_layer_names=decoder_layer_names, verbose=verbose)
         make_lens_hooks(model, start_ix=start_ix, end_ix=end_ix, layer_names=layer_names, decoder_layer_names=decoder_layer_names, verbose=verbose)
         # Tokenize inputs with padding control
         input_ids = text_to_input_ids(tokenizer, inputs, model, pad_to_max_length=pad_to_max_length)
@@ -833,8 +939,25 @@ def plot_topk_logit_lens(
         topk_indices = np.argsort(layer_probs, axis=-1)[..., -topk:][..., ::-1]
         topk_scores = np.take_along_axis(layer_probs, topk_indices, axis=-1)
 
+        if lang_detect:
+            map_color = 'RdBu_r'
+            """pred_probs = np.take_along_axis(layer_probs, layer_preds[..., None], axis=-1)
+            pred_probs_full = np.zeros_like(layer_probs)
+            np.put_along_axis(pred_probs_full, layer_preds[..., None], pred_probs, axis=-1)
+            
+            token_lang_map = build_token_language_map(tokenizer=tokenizer)
+            lang_coverage_per_layer = compute_language_coverage(topk_indices=topk_indices, token_lang_map=token_lang_map, target_languages=None)
+            coverage = [layer_cov.get(lang_detect, 0.0) for layer_cov in lang_coverage_per_layer]
+
+            value_matrix = expand_transition_metric_for_heatmap(coverage, len(layer_probs), layer_probs.shape[1])
+
+            metric_type = 'lang'
+            title = f"{lang_detect} Language Coverage ({'mean topk' if topk_mean else 'top-1'})"
+            """
+            raise NotImplementedError("Not implemented yet!")
+        
         # Entropy (mean over top-k only)
-        if entropy:
+        elif entropy:
             map_color = 'RdBu_r'
             if topk_mean:
                 clipped_probs = np.take_along_axis(layer_probs, topk_indices, axis=-1)
@@ -856,7 +979,7 @@ def plot_topk_logit_lens(
             title = f"Probabilities ({'mean topk' if topk_mean else 'top-1'})"
 
         # KL-Divergence block
-        elif kl:  # Ensure we’re in the KL Divergence block
+        elif kl: 
             map_color = 'Cividis'
 
             if topk_mean:
@@ -888,6 +1011,48 @@ def plot_topk_logit_lens(
             metric_type = 'kl'
             title = f"KL Divergence ({'mean topk' if topk_mean else 'top-1'})"
 
+        # Cosine similarities block
+        elif cosine_sims:
+            map_color = 'Reds'
+
+            pred_probs = np.take_along_axis(layer_probs, layer_preds[..., None], axis=-1)
+            pred_probs_full = np.zeros_like(layer_probs)
+            np.put_along_axis(pred_probs_full, layer_preds[..., None], pred_probs, axis=-1)
+            
+            cosine_sims_values = compute_cosine_similarity_across_layers(layer_probs)
+            value_matrix = expand_transition_metric_for_heatmap(cosine_sims_values, len(layer_probs), layer_probs.shape[1])
+
+            metric_type = 'cos_sims'
+            title = f"Cosine Similarity ({'mean topk' if topk_mean else 'top-1'})"
+
+        # Layer-wise KL-Divergence block
+        elif kl_layerwise:
+            map_color = 'Cividis'
+
+            pred_probs = np.take_along_axis(layer_probs, layer_preds[..., None], axis=-1)
+            pred_probs_full = np.zeros_like(layer_probs)
+            np.put_along_axis(pred_probs_full, layer_preds[..., None], pred_probs, axis=-1)
+            
+            kl_layerwise_values = compute_kl_vs_previous_layer(layer_probs)
+            value_matrix = expand_transition_metric_for_heatmap(kl_layerwise_values, len(layer_probs), layer_probs.shape[1])
+
+            metric_type = 'lw_kl'
+            title = f"Layer-wise KL Div ({'mean topk' if topk_mean else 'top-1'})"
+
+        # Token Variety block
+        elif token_variety:
+            map_color = 'Purples'
+
+            pred_probs = np.take_along_axis(layer_probs, layer_preds[..., None], axis=-1)
+            pred_probs_full = np.zeros_like(layer_probs)
+            np.put_along_axis(pred_probs_full, layer_preds[..., None], pred_probs, axis=-1)
+            
+            token_variety_values = compute_token_variety(topk_indices)
+            value_matrix = expand_metric_for_heatmap(token_variety_values, layer_probs.shape[1])
+
+            metric_type = 'tok_var'
+            title = f"Token Variety ({'mean topk' if topk_mean else 'top-1'})"
+
         # Ranks
         elif ranks:
             map_color = 'Blues'
@@ -905,7 +1070,7 @@ def plot_topk_logit_lens(
             # Calculate ranks based on probabilities, sorting in descending order
             rank_matrix_raw = np.argsort(-layer_probs, axis=-1)  # (L, T, Vocab)
 
-            # Now we need to calculate the rank of the true predicted token for each layer/token
+            # Calculate the rank of the true predicted token for each layer/token
             # For each token, find its position in the sorted list of probabilities
             pred_ranks = np.take_along_axis(rank_matrix_raw, layer_preds[..., None], axis=-1).squeeze(-1) + 1  # +1 to make rank start from 1
 
